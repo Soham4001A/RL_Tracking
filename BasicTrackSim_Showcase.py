@@ -2,6 +2,7 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
+from math import pi,cos,sin
 
 # Environment Parameters
 GRID_SIZE = 100
@@ -18,12 +19,19 @@ class Actor:
         self.vx = 0
         self.vy = 0
         self.max_speed = max_speed
+        self.time = 0
 
     def update_position(self):
         self.x += self.vx * TIME_STEP
         self.y += self.vy * TIME_STEP
         self.x = max(0, min(self.x, GRID_SIZE))
         self.y = max(0, min(self.y, GRID_SIZE))
+
+    def update_fixed_path(self, radius=30, center=(50, 50), speed=0.05):
+        # Circular motion path
+        self.time += speed
+        self.x = center[0] + radius * cos(2 * pi * self.time)
+        self.y = center[1] + radius * sin(2 * pi * self.time)
 
     def set_velocity(self, vx, vy):
         self.vx = np.clip(vx, -self.max_speed, self.max_speed)
@@ -86,7 +94,7 @@ def run_simulation(model):
         # Move target randomly
         target.set_velocity(np.random.uniform(-MAX_SPEED, MAX_SPEED),
                             np.random.uniform(-MAX_SPEED, MAX_SPEED))
-        target.update_position()
+        target.update_fixed_path()
 
         # Calculate state
         dx, dy = target.x - robot.x, target.y - robot.y
