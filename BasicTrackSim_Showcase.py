@@ -27,11 +27,30 @@ class Actor:
         self.x = max(0, min(self.x, GRID_SIZE))
         self.y = max(0, min(self.y, GRID_SIZE))
 
-    def update_fixed_path(self, radius=30, center=(50, 50), speed=0.05):
-        # Circular motion path
-        self.time += speed
-        self.x = center[0] + radius * cos(2 * pi * self.time)
-        self.y = center[1] + radius * sin(2 * pi * self.time)
+    def update_fixed_path(self, side_length=30, center=(50, 50), speed=0.05):
+        # Calculate the total perimeter of the square
+        perimeter = 4 * side_length
+        # Calculate the current position along the perimeter based on time
+        self.time += speed * TIME_STEP
+        distance_along_perimeter = (self.time * perimeter) % perimeter
+
+        # Determine which side of the square the target is on
+        if distance_along_perimeter < side_length:
+            # Top side: move right
+            self.x = center[0] - side_length / 2 + distance_along_perimeter
+            self.y = center[1] - side_length / 2
+        elif distance_along_perimeter < 2 * side_length:
+            # Right side: move down
+            self.x = center[0] + side_length / 2
+            self.y = center[1] - side_length / 2 + (distance_along_perimeter - side_length)
+        elif distance_along_perimeter < 3 * side_length:
+            # Bottom side: move left
+            self.x = center[0] + side_length / 2 - (distance_along_perimeter - 2 * side_length)
+            self.y = center[1] + side_length / 2
+        else:
+            # Left side: move up
+            self.x = center[0] - side_length / 2
+            self.y = center[1] + side_length / 2 - (distance_along_perimeter - 3 * side_length)
 
     def set_velocity(self, vx, vy):
         self.vx = np.clip(vx, -self.max_speed, self.max_speed)
