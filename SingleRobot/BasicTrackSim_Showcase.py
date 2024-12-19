@@ -2,7 +2,7 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
-from math import sqrt
+from math import pi, cos, sin
 
 # Environment Parameters
 GRID_SIZE = 100
@@ -10,9 +10,8 @@ TIME_STEP = 0.1
 MAX_SPEED = 20
 STATE_SIZE = 4  # [dx, dy, robot_vx, robot_vy]
 ACTION_SIZE = 5  # [up, down, left, right, stay]
-NUM_ROBOTS = 4
 
-# Actor class for robots and target
+# Actor class for robot and target
 class Actor:
     def __init__(self, x, y, max_speed):
         self.x = x
@@ -57,7 +56,7 @@ class Actor:
         self.vx = np.clip(vx, -self.max_speed, self.max_speed)
         self.vy = np.clip(vy, -self.max_speed, self.max_speed)
 
-# Neural network model
+# Updated model to align with the previous architecture
 class UpdatedModel(torch.nn.Module):
     def __init__(self, state_size, action_size):
         super(UpdatedModel, self).__init__()
@@ -70,7 +69,7 @@ class UpdatedModel(torch.nn.Module):
     def forward(self, state):
         return self.fc(state)
 
-# Load trained model
+# Load the trained model with compatibility adjustments
 def load_model(model_path, state_size, action_size):
     model = UpdatedModel(state_size, action_size)
     try:
@@ -86,107 +85,79 @@ def load_model(model_path, state_size, action_size):
     model.eval()
     return model
 
+# Choose action using the updated model
 def choose_action(state, model):
     state = torch.FloatTensor(state).unsqueeze(0)  # Add batch dimension
     with torch.no_grad():
         q_values = model(state)
     return torch.argmax(q_values).item()
 
-def compute_reward(distance, prev_distance, robot_idx, robots):
-    # Base reward: closer distance is better
-    reward = -distance / GRID_SIZE
-    if distance < prev_distance:
-        reward += 0.5
-
-    # Collision penalty
-    for j, other_robot in enumerate(robots):
-        if j != robot_idx:
-            dist_to_other = sqrt((robots[robot_idx].x - other_robot.x)**2 + 
-                                 (robots[robot_idx].y - other_robot.y)**2)
-            if dist_to_other < 2:  # Collision threshold
-                reward -= 1.0
-                break
-    return reward
-
 # Simulation function
 def run_simulation(model):
-    # Initialize multiple robots at different starting positions
-    start_x, start_y = GRID_SIZE / 2, GRID_SIZE / 2
-    robots = [
-        Actor(start_x, start_y, MAX_SPEED),
-        Actor(start_x + 5, start_y, MAX_SPEED),
-        Actor(start_x, start_y + 5, MAX_SPEED),
-        Actor(start_x + 5, start_y + 5, MAX_SPEED)
-    ]
+    # Initialize robot and target
+    robot = Actor(GRID_SIZE / 2, GRID_SIZE / 2, MAX_SPEED)
     target = Actor(np.random.uniform(0, GRID_SIZE), np.random.uniform(0, GRID_SIZE), MAX_SPEED)
-    
-    # Track previous distances for reward calculation
-    prev_distances = [float('inf')] * NUM_ROBOTS
 
     # Visualization setup
     fig, ax = plt.subplots()
     ax.set_xlim(0, GRID_SIZE)
     ax.set_ylim(0, GRID_SIZE)
 
-    # Assign different colors/markers to each robot for clarity
-    colors = ['bo', 'go', 'ro', 'mo']
-    robot_dots = []
-    for c in colors:
-        dot, = ax.plot([], [], c)
-        robot_dots.append(dot)
-    target_dot, = ax.plot([], [], 'yo', label='Target')
+    robot_dot, = ax.plot([], [], 'bo', label='Robot')
+    target_dot, = ax.plot([], [], 'ro', label='Target')
     ax.legend()
 
+    # Animation initialization
     def init():
-        for robot_dot in robot_dots:
-            robot_dot.set_data([], [])
+        robot_dot.set_data([], [])
         target_dot.set_data([], [])
-        return robot_dots + [target_dot]
+        return robot_dot, target_dot
 
+    # Animation update function
     def update(frame):
-        nonlocal robots, target, prev_distances
+        nonlocal robot, target
 
         # Move target along a fixed path
         target.update_fixed_path()
 
-        # Update each robot
-        for i, robot in enumerate(robots):
-            dx, dy = target.x - robot.x, target.y - robot.y
-            state = [dx, dy, robot.vx, robot.vy]
-            action = choose_action(state, model)
+        # Calculate state
+        dx, dy = target.x - robot.x, target.y - robot.y
+        state = [dx, dy, robot.vx, robot.vy]
 
-            # Update robot velocity based on action
-            if action == 0:  # up
-                robot.set_velocity(0, MAX_SPEED)
-            elif action == 1:  # down
-                robot.set_velocity(0, -MAX_SPEED)
-            elif action == 2:  # left
-                robot.set_velocity(-MAX_SPEED, 0)
-            elif action == 3:  # right
-                robot.set_velocity(MAX_SPEED, 0)
-            else:  # stay
-                robot.set_velocity(0, 0)
+        # Choose action using the updated model
+        action = choose_action(state, model)
 
-            robot.update_position()
-            distance = sqrt(dx**2 + dy**2)
-            _ = compute_reward(distance, prev_distances[i], i, robots)
-            prev_distances[i] = distance
+        # Update robot velocity based on action
+        if action == 0:  # up
+            robot.set_velocity(0, MAX_SPEED)
+        elif action == 1:  # down
+            robot.set_velocity(0, -MAX_SPEED)
+        elif action == 2:  # left
+            robot.set_velocity(-MAX_SPEED, 0)
+        elif action == 3:  # right
+            robot.set_velocity(MAX_SPEED, 0)
+        else:  # stay
+            robot.set_velocity(0, 0)
 
-            # Update visualization for this robot
-            robot_dots[i].set_data([robot.x], [robot.y])
+        robot.update_position()
 
-        # Update target visualization
+        # Update visualization
+        robot_dot.set_data([robot.x], [robot.y])
         target_dot.set_data([target.x], [target.y])
-        return robot_dots + [target_dot]
 
-    # Note: Removed blit=True to avoid issues with multiple artists
-    ani = FuncAnimation(fig, update, frames=200, init_func=init)
+        return robot_dot, target_dot
 
-    print("Running simulation with multiple robots. Close the window to finish.")
+    # Create animation
+    ani = FuncAnimation(fig, update, frames=200, init_func=init, blit=True)
+
+    # Display animation
+    print("Running simulation with the updated model. Close the window to finish.")
     plt.show()
 
 # Main function
 if __name__ == "__main__":
-    model_path = "/Users/sohamsane/Documents/Coding Projects/ObjectTrackingRL/simple_rl_model_multi_robot.pth"
+    model_path = "/Users/sohamsane/Documents/Coding Projects/ObjectTrackingRL/SingleRobot/simple_rl_model.pth"  # Updated model path
     model = load_model(model_path, STATE_SIZE, ACTION_SIZE)
+
+    # Run the simulation
     run_simulation(model)
