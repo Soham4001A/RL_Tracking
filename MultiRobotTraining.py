@@ -135,13 +135,14 @@ def compute_reward(distance, prev_distance, robot_idx, robots):
 
     # Collision penalty
     # If robot i is too close to any other robot, penalize
+    """
     for j, other_robot in enumerate(robots):
         if j != robot_idx:
             dist_to_other = sqrt((robots[robot_idx].x - other_robot.x)**2 + (robots[robot_idx].y - other_robot.y)**2)
             if dist_to_other < 2:  # Collision threshold
                 reward -= 1.0
                 break
-
+    """
     return max(-1, min(1, reward))
 
 def run_simulation(agent, robots, target, num_steps=200, epsilon=0.1):
