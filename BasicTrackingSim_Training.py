@@ -2,30 +2,40 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import random
-from collections import deque
+from math import sqrt, cos, sin, pi, atan2
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
-from math import sqrt
-
-VISUALIZATION = False
+from collections import deque
 
 # Environment Parameters
 GRID_SIZE = 100
 TIME_STEP = 0.1
-MAX_SPEED = 20
-MIN_DISTANCE = sqrt(2)  # Distance threshold for penalization
+MAX_SPEED = 10
+MIN_DISTANCE = sqrt(2)
+VISUALIZATION = True
 
 # RL Parameters
-STATE_SIZE = 4  # [dx, dy, vx, vy]
-ACTION_SIZE = 5  # [up, down, left, right, stay]
-GAMMA = 0.99  # Discount factor
-LR = 0.001  # Learning rate
-EPSILON = 1.0  # Initial exploration rate
-EPSILON_DECAY = 0.995
-EPSILON_MIN = 0.01
-BATCH_SIZE = 64
-MEMORY_SIZE = 10000
+SEQ_LENGTH = 3  # Number of past states to feed into the transformer
+STATE_DIM = 6   # [dx, dy, vx, vy, target_vx, target_vy]
+ACTION_SIZE = 5  # Expanded actions for diagonal movement
+GAMMA = 0.5
+LR = 0.0003
+CLIP_EPS = 0.25
+EPOCHS = 50
+BATCH_SIZE = 128*6
+
+# Expanded Action Map (adds diagonal movements)
+ACTION_MAP = {
+    0: (0, MAX_SPEED),    # Up
+    1: (0, -MAX_SPEED),   # Down
+    2: (-MAX_SPEED, 0),   # Left
+    3: (MAX_SPEED, 0),    # Right
+    #4: (MAX_SPEED / sqrt(2), MAX_SPEED / sqrt(2)),    # Up-Right
+    #5: (-MAX_SPEED / sqrt(2), MAX_SPEED / sqrt(2)),   # Up-Left
+    #6: (MAX_SPEED / sqrt(2), -MAX_SPEED / sqrt(2)),   # Down-Right
+    #7: (-MAX_SPEED / sqrt(2), -MAX_SPEED / sqrt(2)),  # Down-Left
+    4: (0, 0)             # Stay
+}
 
 # Actor class for robot and target
 class Actor:
@@ -35,6 +45,18 @@ class Actor:
         self.vx = 0
         self.vy = 0
         self.max_speed = max_speed
+        self.time = 0
+
+    def update_fixed_path(self, radius=30, center=(50, 50), speed=0.05):
+        self.time += speed
+        self.vx = -radius * sin(2 * pi * self.time) * speed * 2 * pi
+        self.vy = radius * cos(2 * pi * self.time) * speed * 2 * pi
+        self.x = center[0] + radius * cos(2 * pi * self.time)
+        self.y = center[1] + radius * sin(2 * pi * self.time)
+
+    def set_velocity(self, ax, ay):
+        self.vx = np.clip(self.vx + ax * TIME_STEP, -self.max_speed, self.max_speed)
+        self.vy = np.clip(self.vy + ay * TIME_STEP, -self.max_speed, self.max_speed)
 
     def update_position(self):
         self.x += self.vx * TIME_STEP
@@ -42,191 +64,140 @@ class Actor:
         self.x = max(0, min(self.x, GRID_SIZE))
         self.y = max(0, min(self.y, GRID_SIZE))
 
-    def set_velocity(self, vx, vy):
-        self.vx = np.clip(vx, -self.max_speed, self.max_speed)
-        self.vy = np.clip(vy, -self.max_speed, self.max_speed)
+# Transformer Network for PPO
+class TransformerNetwork(nn.Module):
+    def __init__(self, state_size, action_size, d_model=64, nhead=2, dim_feedforward=128, num_layers=2):
+        super(TransformerNetwork, self).__init__()
+        self.input_layer = nn.Linear(state_size, d_model)
+        self.transformer = nn.TransformerEncoder(
+            nn.TransformerEncoderLayer(d_model=d_model, nhead=nhead, dim_feedforward=dim_feedforward),
+            num_layers=num_layers
+        )
+        self.policy_head = nn.Linear(d_model, action_size)
+        self.value_head = nn.Linear(d_model, 1)
 
-# Q-Network for DQN
-class QNetwork(nn.Module):
-    def __init__(self, state_size, action_size):
-        super(QNetwork, self).__init__()
-        self.fc1 = nn.Linear(state_size, 64)
-        self.fc2 = nn.Linear(64, 64)
-        self.fc3 = nn.Linear(64, action_size)
+    def forward(self, x):
+        x = self.input_layer(x).transpose(0, 1)
+        x = self.transformer(x).transpose(0, 1)[:, -1, :]
+        policy = self.policy_head(x)
+        value = self.value_head(x)
+        return policy, value
 
-    def forward(self, state):
-        x = torch.relu(self.fc1(state))
-        x = torch.relu(self.fc2(x))
-        return self.fc3(x)
+# PPO Agent
+class PPOAgent:
+    def __init__(self, state_dim, action_size):
+        self.policy_network = TransformerNetwork(state_dim, action_size)
+        self.optimizer = optim.Adam(self.policy_network.parameters(), lr=LR)
+        self.memory = []
 
-# DQN Agent
-class DQNAgent:
-    def __init__(self, state_size, action_size):
-        self.state_size = state_size
-        self.action_size = action_size
-        self.memory = deque(maxlen=MEMORY_SIZE)
-        self.epsilon = EPSILON
-        self.gamma = GAMMA
-        self.model = QNetwork(state_size, action_size)
-        self.target_model = QNetwork(state_size, action_size)
-        self.target_model.load_state_dict(self.model.state_dict())
-        self.optimizer = optim.Adam(self.model.parameters(), lr=LR)
+    def remember(self, state_seq, action, reward, next_state_seq, done):
+        self.memory.append((state_seq, action, reward, next_state_seq, done))
 
-    def act(self, state):
-        if np.random.rand() < self.epsilon:
-            return random.randrange(self.action_size)
-        state = torch.FloatTensor(state).unsqueeze(0)
-        q_values = self.model(state)
-        return torch.argmax(q_values).item()
+    def act(self, state_seq):
+        with torch.no_grad():
+            logits, _ = self.policy_network(torch.tensor(state_seq, dtype=torch.float).unsqueeze(0))
+        probs = torch.softmax(logits, dim=-1)
+        
+        # Debugging: Check the values of probs
+        if torch.any(probs.isnan()) or torch.any(probs < 0):
+            print("Invalid probabilities detected:", probs)
+            print("Logits were:", logits)
+            raise ValueError("Invalid probabilities in act method.")
+        
+        return torch.multinomial(probs, 1).item()
 
-    def remember(self, state, action, reward, next_state, done):
-        self.memory.append((state, action, reward, next_state, done))
-
-    def replay(self):
-        if len(self.memory) < BATCH_SIZE:
+    def learn(self):
+        if not self.memory:
             return
-        batch = random.sample(self.memory, BATCH_SIZE)
-        for state, action, reward, next_state, done in batch:
-            state = torch.FloatTensor(state)
-            next_state = torch.FloatTensor(next_state)
-            reward = torch.FloatTensor([reward])
-            done = torch.FloatTensor([done])
-            q_values = self.model(state)
-            next_q_values = self.target_model(next_state)
-            target = reward + (1 - done) * self.gamma * torch.max(next_q_values)
-            q_values[action] = target
-            loss = torch.nn.functional.mse_loss(self.model(state), q_values)
+        # Extract memory into separate components
+        states, actions, rewards, next_states, dones = zip(*self.memory)
+        states = torch.tensor(states, dtype=torch.float)
+        actions = torch.tensor(actions)
+        
+        # Compute discounted returns
+        returns = []
+        discounted_sum = 0
+        for r in reversed(rewards):
+            discounted_sum = r + GAMMA * discounted_sum
+            returns.insert(0, discounted_sum)  # Insert at the start to reverse the order
+        returns = torch.tensor(returns, dtype=torch.float)
+        
+        for _ in range(EPOCHS):
+            logits, values = self.policy_network(states)
+            probs = torch.softmax(logits - torch.max(logits), dim=-1)
+
+            # Select log-probabilities of taken actions
+            log_probs = torch.log(probs.gather(1, actions.view(-1, 1)).squeeze())
+
+            # Compute advantage
+            advantages = returns - values.squeeze()
+
+            # Compute policy loss
+            policy_loss = -(log_probs * advantages.detach()).mean()
+
+            # Compute value loss
+            value_loss = 0.5 * nn.functional.mse_loss(values.squeeze(), returns)
+
+            # Combine losses
+            loss = policy_loss + value_loss
+
+            # Optimize
             self.optimizer.zero_grad()
             loss.backward()
             self.optimizer.step()
-        self.epsilon = max(EPSILON_MIN, self.epsilon * EPSILON_DECAY)
+        
+        # Clear memory after learning
+        self.memory = []
 
-    def update_target_model(self):
-        self.target_model.load_state_dict(self.model.state_dict())
+def compute_reward(distance, prev_distance, robot_vx, robot_vy, target_vx, target_vy):
+    # Distance-based reward
+    distance_reduction = prev_distance - distance
+    reward = 5 * distance_reduction
 
-# Environment Simulation
-def compute_reward(distance):
+    # Velocity matching reward
+    velocity_diff = sqrt((robot_vx - target_vx)**2 + (robot_vy - target_vy)**2)
+    reward -= 0.5 * velocity_diff  # Penalty for velocity mismatch
+
+    # Small movement penalty
+    reward -= 0.05
+
+    # Penalty for being too close
     if distance < MIN_DISTANCE:
-        return -10.0  # Penalty for being too close
-    return -1.0 * distance  # Reward for getting closer but not too close
+        reward -= 5.0
 
-def simulate_episode(agent, robot, target, num_steps=1000):
-    total_reward = 0
-    for step in range(num_steps):
+    print(f"Reward is {reward}")
+    return reward
+
+def run_simulation(agent, robot, target, num_steps=200):
+    state_buffer = deque([[0] * STATE_DIM for _ in range(SEQ_LENGTH)], maxlen=SEQ_LENGTH)
+    prev_distance = sqrt((target.x - robot.x)**2 + (target.y - robot.y)**2)
+    
+    for _ in range(num_steps):
+        target.update_fixed_path()
         dx, dy = target.x - robot.x, target.y - robot.y
-        state = [dx, dy, robot.vx, robot.vy]
-        action = agent.act(state)
+        distance = sqrt(dx**2 + dy**2)
 
-        # Execute action
-        if action == 0:  # up
-            robot.set_velocity(0, MAX_SPEED)
-        elif action == 1:  # down
-            robot.set_velocity(0, -MAX_SPEED)
-        elif action == 2:  # left
-            robot.set_velocity(-MAX_SPEED, 0)
-        elif action == 3:  # right
-            robot.set_velocity(MAX_SPEED, 0)
-        else:  # stay
-            robot.set_velocity(0, 0)
-
+        state = [dx, dy, robot.vx, robot.vy, target.vx, target.vy]
+        state_buffer.append(state)
+        action = agent.act(list(state_buffer))
+        ax, ay = ACTION_MAP[action]
+        robot.set_velocity(ax, ay)
         robot.update_position()
-        target.set_velocity(np.random.uniform(-MAX_SPEED, MAX_SPEED), np.random.uniform(-MAX_SPEED, MAX_SPEED))
-        target.update_position()
 
-        # Calculate reward
-        distance = np.sqrt(dx**2 + dy**2)
-        reward = compute_reward(distance)
+        reward = compute_reward(distance, prev_distance, robot.vx, robot.vy, target.vx, target.vy)
+        prev_distance = distance
+        agent.remember(list(state_buffer), action, reward, list(state_buffer), False)
 
-        # Observe next state
-        next_dx, next_dy = target.x - robot.x, target.y - robot.y
-        next_state = [next_dx, next_dy, robot.vx, robot.vy]
-        done = False  # Define a termination condition if necessary
-        agent.remember(state, action, reward, next_state, done)
-        total_reward += reward
-
-        # Train the agent
-        agent.replay()
-
-    agent.update_target_model()
-    return total_reward
-
-# Visualization
-def visualize(agent, robot, target, num_steps=200):
-    fig, ax = plt.subplots()
-    ax.set_xlim(0, GRID_SIZE)
-    ax.set_ylim(0, GRID_SIZE)
-    robot_dot, = ax.plot([], [], 'bo', label='Robot')
-    target_dot, = ax.plot([], [], 'ro', label='Target')
-    ax.legend()
-
-    def init():
-        robot_dot.set_data([], [])
-        target_dot.set_data([], [])
-        return robot_dot, target_dot
-
-    def update(frame):
-        robot.update_position()
-        target.update_position()
-
-        # Update the robot's position (must be a sequence)
-        robot_dot.set_data([robot.x], [robot.y])  # Wrapping x and y in lists
-
-        # Update the target's position (must also be a sequence)
-        target_dot.set_data([target.x], [target.y])  # Wrapping x and y in lists
-
-        return robot_dot, target_dot
-
-
-    anim = FuncAnimation(fig, update, frames=num_steps, init_func=init, blit=True, interval=50)
-    plt.show()
+    agent.learn()
 
 # Main Training Loop
 robot = Actor(GRID_SIZE / 2, GRID_SIZE / 2, MAX_SPEED)
-target = Actor(np.random.uniform(0, GRID_SIZE), np.random.uniform(0, GRID_SIZE), MAX_SPEED)
-agent = DQNAgent(STATE_SIZE, ACTION_SIZE)
+target = Actor(50, 50, MAX_SPEED)
+agent = PPOAgent(STATE_DIM, ACTION_SIZE)
 
-episodes = 100
-for e in range(episodes):
-    print(f"Episode {e + 1}/{episodes}, Training Agent...")
-    reward = simulate_episode(agent, robot, target)
-    print(f"Episode {e + 1}/{episodes}, Total Reward: {reward:.2f}")
+for episode in range(100):
+    print(f"Episode {episode + 1}")
+    run_simulation(agent, robot, target)
 
-    if VISUALIZATION: #Keep in mind that this is extremely intensive on the CPU/GPU
-        
-        # Reset and visualize the episode
-        fig, ax = plt.subplots()
-        ax.set_xlim(0, GRID_SIZE)
-        ax.set_ylim(0, GRID_SIZE)
-
-        robot_dot, = ax.plot([], [], 'bo', label='Robot')
-        target_dot, = ax.plot([], [], 'ro', label='Target')
-        ax.legend()
-
-        def init():
-            robot_dot.set_data([], [])
-            target_dot.set_data([], [])
-            return robot_dot, target_dot
-
-        def update(frame):
-            robot.update_position()
-            target.update_position()
-
-            robot_dot.set_data([robot.x], [robot.y])
-            target_dot.set_data([target.x], [target.y])
-
-            return robot_dot, target_dot
-
-        ani = FuncAnimation(fig, update, frames=200, init_func=init, blit=True)
-
-        # Display the figure and block until the user closes it
-        print("Animation displayed. Close the figure window to proceed to the next episode.")
-        plt.show(block=True)
-
-        # Close the current figure before proceeding
-        plt.close(fig)
-
-# Save the trained model
-torch.save(agent.model.state_dict(), "dqn_robot_model.pth")
-print("Model saved as 'dqn_robot_model.pth'.")
-
-
+torch.save(agent.policy_network.state_dict(), "ppo_transformer_model.pth")
+print("Model saved successfully!")
