@@ -14,10 +14,10 @@ VISUALIZATION = False
 
 # RL Parameters
 STATE_DIM = 4  # [dx, dy, robot_vx, robot_vy]
-ACTION_SIZE = 5  # Actions: Up, Down, Left, Right, Stay
+ACTION_SIZE = 5  # Actions: Up, Down, Left, Right
 GAMMA = 0.9
-LR = 0.0005  # Reduced learning rate for stability
-BATCH_SIZE = 128  # Larger batch size for gradient stability
+LR = 0.0005
+BATCH_SIZE = 128
 
 # Action Map
 ACTION_MAP = {
@@ -25,10 +25,9 @@ ACTION_MAP = {
     1: (0, -MAX_SPEED),   # Down
     2: (-MAX_SPEED, 0),   # Left
     3: (MAX_SPEED, 0),    # Right
-    4: (0, 0)             # Stay
+    4: (0,0)              # Stay 
 }
 
-# Actor class for robot and target
 class Actor:
     def __init__(self, x, y, max_speed):
         self.x = x
@@ -36,16 +35,14 @@ class Actor:
         self.vx = 0
         self.vy = 0
         self.max_speed = max_speed
-        self.time = 0  # Add this attribute for time tracking
+        self.time = 0
 
     def update_fixed_path(self, side_length=30, center=(50, 50), speed=0.05):
-        # Calculate the total perimeter of the square
+        # Square path for the target
         perimeter = 4 * side_length
-        # Calculate the current position along the perimeter based on time
         self.time += speed * TIME_STEP
         distance_along_perimeter = (self.time * perimeter) % perimeter
 
-        # Determine which side of the square the target is on
         if distance_along_perimeter < side_length:
             # Top side: move right
             self.x = center[0] - side_length / 2 + distance_along_perimeter
@@ -62,7 +59,7 @@ class Actor:
             # Left side: move up
             self.x = center[0] - side_length / 2
             self.y = center[1] + side_length / 2 - (distance_along_perimeter - 3 * side_length)
-            
+
     def set_velocity(self, ax, ay):
         self.vx = np.clip(ax, -self.max_speed, self.max_speed)
         self.vy = np.clip(ay, -self.max_speed, self.max_speed)
@@ -73,7 +70,6 @@ class Actor:
         self.x = max(0, min(self.x, GRID_SIZE))
         self.y = max(0, min(self.y, GRID_SIZE))
 
-# Simple Neural Network
 class SimpleNN(nn.Module):
     def __init__(self, state_dim, action_size):
         super(SimpleNN, self).__init__()
@@ -86,12 +82,11 @@ class SimpleNN(nn.Module):
     def forward(self, x):
         return self.fc(x)
 
-# RL Agent
 class Agent:
     def __init__(self, state_dim, action_size):
         self.policy_network = SimpleNN(state_dim, action_size)
         self.optimizer = optim.Adam(self.policy_network.parameters(), lr=LR)
-        self.memory = deque(maxlen=5000)  # Increased buffer size
+        self.memory = deque(maxlen=5000)
 
     def remember(self, state, action, reward, next_state, done):
         self.memory.append((state, action, reward, next_state, done))
@@ -120,77 +115,87 @@ class Agent:
             next_q_values = self.policy_network(next_states).max(1)[0]
             targets = rewards + GAMMA * next_q_values * (1 - dones)
 
-        # Compute predictions
         q_values = self.policy_network(states)
         predictions = q_values.gather(1, actions.unsqueeze(1)).squeeze()
 
-        # Compute loss
         loss = nn.functional.mse_loss(predictions, targets)
-
-        # Optimize
         self.optimizer.zero_grad()
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.policy_network.parameters(), max_norm=1)  # Gradient clipping
+        torch.nn.utils.clip_grad_norm_(self.policy_network.parameters(), max_norm=1)
         self.optimizer.step()
 
-# Reward Function
-def compute_reward(distance, prev_distance):
-    reward = -distance / GRID_SIZE  # Normalize reward
-    if distance < prev_distance:
-        reward += 0.5  # Small positive reward for reducing distance
-    return max(-1, min(1, reward))  # Clip reward
-
-# Normalize state
 def normalize_state(state):
     return [s / GRID_SIZE for s in state]
 
-# Simulation Function
-def run_simulation(agent, robot, target, num_steps=200, epsilon=0.1):
-    total_reward = 0
-    prev_distance = float('inf')
+def compute_reward(distance, prev_distance, robot_idx, robots):
+    # Base reward: closer distance is better
+    reward = -distance / GRID_SIZE
+    if distance < prev_distance:
+        reward += 0.5
+
+    # Collision penalty
+    # If robot i is too close to any other robot, penalize
+    for j, other_robot in enumerate(robots):
+        if j != robot_idx:
+            dist_to_other = sqrt((robots[robot_idx].x - other_robot.x)**2 + (robots[robot_idx].y - other_robot.y)**2)
+            if dist_to_other < 2:  # Collision threshold
+                reward -= 1.0
+                break
+
+    return max(-1, min(1, reward))
+
+def run_simulation(agent, robots, target, num_steps=200, epsilon=0.1):
+    total_rewards = [0] * len(robots)
+    prev_distances = [float('inf')] * len(robots)
+
     for _ in range(num_steps):
         target.update_fixed_path()
-        dx, dy = target.x - robot.x, target.y - robot.y
-        distance = sqrt(dx**2 + dy**2)
 
-        state = normalize_state([dx, dy, robot.vx, robot.vy])
-        action = agent.act(state, epsilon)
-        ax, ay = ACTION_MAP[action]
-        robot.set_velocity(ax, ay)
-        robot.update_position()
+        # For each robot, choose action and update
+        for i, robot in enumerate(robots):
+            dx, dy = target.x - robot.x, target.y - robot.y
+            distance = sqrt(dx**2 + dy**2)
 
-        next_state = normalize_state([target.x - robot.x, target.y - robot.y, robot.vx, robot.vy])
-        reward = compute_reward(distance, prev_distance)
-        prev_distance = distance
-        total_reward += reward
+            state = normalize_state([dx, dy, robot.vx, robot.vy])
+            action = agent.act(state, epsilon)
+            ax, ay = ACTION_MAP[action]
+            robot.set_velocity(ax, ay)
+            robot.update_position()
 
-        done = distance < 1  # Episode ends if robot reaches target
-        agent.remember(state, action, reward, next_state, done)
+            next_state = normalize_state([target.x - robot.x, target.y - robot.y, robot.vx, robot.vy])
+            reward = compute_reward(distance, prev_distances[i], i, robots)
+            prev_distances[i] = distance
+            total_rewards[i] += reward
 
-        if done:
-            break
+            done = distance < 1
+            agent.remember(state, action, reward, next_state, done)
 
     agent.replay()
-    return total_reward
+    # Return the sum of all rewards as a single metric
+    return sum(total_rewards)
 
 # Main Training Loop
-robot = Actor(GRID_SIZE / 2, GRID_SIZE / 2, MAX_SPEED)
+NUM_ROBOTS = 4
+robots = [Actor(GRID_SIZE / 2, GRID_SIZE / 2, MAX_SPEED) for _ in range(NUM_ROBOTS)]
 target = Actor(50, 50, MAX_SPEED)
 agent = Agent(STATE_DIM, ACTION_SIZE)
 
 rewards = []
 for episode in range(10000):
-    epsilon = max(0.1, 1 - episode / 1000)  # Slower epsilon decay
-    total_reward = run_simulation(agent, robot, target, epsilon=epsilon)
+    epsilon = max(0.1, 1 - episode / 1000)
+    # Reinitialize robot positions for each episode if desired:
+    # (Optional) For stability, you might reset robots to center:
+    # robots = [Actor(GRID_SIZE / 2, GRID_SIZE / 2, MAX_SPEED) for _ in range(NUM_ROBOTS)]
+    
+    total_reward = run_simulation(agent, robots, target, epsilon=epsilon)
     rewards.append(total_reward)
     print(f"Episode: {episode + 1}, Total Reward: {total_reward}")
 
-# Plot rewards
 plt.plot(rewards)
 plt.xlabel("Episode")
-plt.ylabel("Total Reward")
-plt.title("Reward Progression")
+plt.ylabel("Total Reward (All Robots)")
+plt.title("Reward Progression with Multiple Robots & Collision Avoidance")
 plt.show()
 
-torch.save(agent.policy_network.state_dict(), "simple_rl_model.pth")
+torch.save(agent.policy_network.state_dict(), "simple_rl_model_multi_robot.pth")
 print("Model saved successfully!")
