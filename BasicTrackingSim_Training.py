@@ -15,9 +15,9 @@ VISUALIZATION = False
 # RL Parameters
 STATE_DIM = 4  # [dx, dy, robot_vx, robot_vy]
 ACTION_SIZE = 4  # Actions: Up, Down, Left, Right, Stay
-GAMMA = 0.99
+GAMMA = 0.9
 LR = 0.0005  # Reduced learning rate for stability
-BATCH_SIZE = 64  # Larger batch size for gradient stability
+BATCH_SIZE = 128  # Larger batch size for gradient stability
 
 # Action Map
 ACTION_MAP = {
@@ -116,7 +116,7 @@ class Agent:
 def compute_reward(distance, prev_distance):
     reward = -distance / GRID_SIZE  # Normalize reward
     if distance < prev_distance:
-        reward += 0.1  # Small positive reward for reducing distance
+        reward += 0.5  # Small positive reward for reducing distance
     return max(-1, min(1, reward))  # Clip reward
 
 # Normalize state
