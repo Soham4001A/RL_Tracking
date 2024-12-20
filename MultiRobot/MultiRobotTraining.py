@@ -13,8 +13,9 @@ MAX_SPEED = 10
 VISUALIZATION = False
 
 # RL Parameters
-STATE_DIM = 4  # [dx, dy, robot_vx, robot_vy]
-ACTION_SIZE = 5  # Actions: Up, Down, Left, Right
+NUM_ROBOTS = 4
+STATE_DIM = 4 + (NUM_ROBOTS - 1) * 2  # Adjusted for additional robot distances
+ACTION_SIZE = 5
 GAMMA = 0.9
 LR = 0.0005
 BATCH_SIZE = 128
@@ -84,7 +85,7 @@ class SimpleNN(nn.Module):
 
 class Agent:
     def __init__(self, state_dim, action_size):
-        self.policy_network = SimpleNN(state_dim, action_size)
+        self.policy_network = SimpleNN(STATE_DIM, ACTION_SIZE)
         self.optimizer = optim.Adam(self.policy_network.parameters(), lr=LR)
         self.memory = deque(maxlen=5000)
 
@@ -127,23 +128,23 @@ class Agent:
 def normalize_state(state):
     return [s / GRID_SIZE for s in state]
 
-def compute_reward(distance, prev_distance, robot_idx, robots):
-    # Base reward: closer distance is better
+def compute_reward(distance, prev_distance, robot_idx, robots, other_robot_distances):
+    """
+    Compute the reward for a given robot based on distance to target, relative distance 
+    to other robots, and collisions or proximity to other robots.
+    """
+    # Base reward: closer distance to the target is better
     reward = -distance / GRID_SIZE
     if distance < prev_distance:
         reward += 0.5
 
-    # Collision penalty
-    # If robot i is too close to any other robot, penalize
-    """
-    for j, other_robot in enumerate(robots):
-        if j != robot_idx:
-            dist_to_other = sqrt((robots[robot_idx].x - other_robot.x)**2 + (robots[robot_idx].y - other_robot.y)**2)
-            if dist_to_other < 2:  # Collision threshold
-                reward -= 1.0
-                break
-    """
-    return max(-1, min(1, reward))
+    # Collision penalty for identical or very close positions
+    for dist in other_robot_distances:
+        if dist == (0, 0):  # Check for exact overlap with another robot
+            reward -= 0.5  # Apply a negative reward for collision
+
+    # Limit reward to a reasonable range
+    return max(-10, min(1, reward))
 
 def run_simulation(agent, robots, target, num_steps=200, epsilon=0.1):
     total_rewards = [0] * len(robots)
@@ -152,31 +153,47 @@ def run_simulation(agent, robots, target, num_steps=200, epsilon=0.1):
     for _ in range(num_steps):
         target.update_fixed_path()
 
-        # For each robot, choose action and update
         for i, robot in enumerate(robots):
+            # Step 1: Normalize the state (before action)
             dx, dy = target.x - robot.x, target.y - robot.y
-            distance = sqrt(dx**2 + dy**2)
+            # Include relative positions of other robots in the state
+            other_robot_distances = []
+            for j, other_robot in enumerate(robots):
+                if j != i:  # Skip itself
+                    dist_x = other_robot.x - robot.x
+                    dist_y = other_robot.y - robot.y
+                    other_robot_distances.append((dist_x, dist_y))
+            
+            # Flatten other robot distances to include in the state
+            flat_other_distances = [coord for dist in other_robot_distances for coord in dist]
+            state = normalize_state([dx, dy, robot.vx, robot.vy] + flat_other_distances)
 
-            state = normalize_state([dx, dy, robot.vx, robot.vy])
+            # Step 2: Choose action and update robot's position
             action = agent.act(state, epsilon)
             ax, ay = ACTION_MAP[action]
             robot.set_velocity(ax, ay)
             robot.update_position()
 
-            next_state = normalize_state([target.x - robot.x, target.y - robot.y, robot.vx, robot.vy])
-            reward = compute_reward(distance, prev_distances[i], i, robots)
-            prev_distances[i] = distance
+            # Step 3: Calculate new distance after the action
+            dx, dy = target.x - robot.x, target.y - robot.y
+            distance = sqrt(dx**2 + dy**2)
+
+            # Step 4: Compute reward based on the updated distance
+            reward = compute_reward(distance, prev_distances[i], i, robots,other_robot_distances)
             total_rewards[i] += reward
 
+            # Step 5: Normalize the next state and update distance
+            next_state = normalize_state([dx, dy, robot.vx, robot.vy] + flat_other_distances)
+            prev_distances[i] = distance
+
+            # Step 6: Remember this transition
             done = distance < 1
             agent.remember(state, action, reward, next_state, done)
 
     agent.replay()
-    # Return the sum of all rewards as a single metric
     return sum(total_rewards)
 
 # Main Training Loop
-NUM_ROBOTS = 4
 robots = [Actor(GRID_SIZE / 2, GRID_SIZE / 2, MAX_SPEED) for _ in range(NUM_ROBOTS)]
 target = Actor(50, 50, MAX_SPEED)
 agent = Agent(STATE_DIM, ACTION_SIZE)

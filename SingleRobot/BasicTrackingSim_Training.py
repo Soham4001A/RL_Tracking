@@ -148,28 +148,41 @@ def normalize_state(state):
 def run_simulation(agent, robot, target, num_steps=200, epsilon=0.1):
     total_reward = 0
     prev_distance = float('inf')
+    
     for _ in range(num_steps):
         target.update_fixed_path()
+        
+        # Calculate state based on current positions
         dx, dy = target.x - robot.x, target.y - robot.y
-        distance = sqrt(dx**2 + dy**2)
-
         state = normalize_state([dx, dy, robot.vx, robot.vy])
+        
+        # Decide the action
         action = agent.act(state, epsilon)
         ax, ay = ACTION_MAP[action]
+        
+        # Update the robot's velocity and position
         robot.set_velocity(ax, ay)
         robot.update_position()
-
-        next_state = normalize_state([target.x - robot.x, target.y - robot.y, robot.vx, robot.vy])
+        
+        # Recalculate the distance after the robot's position has changed
+        dx, dy = target.x - robot.x, target.y - robot.y
+        distance = sqrt(dx**2 + dy**2)
+        
+        # Compute the next state
+        next_state = normalize_state([dx, dy, robot.vx, robot.vy])
+        
+        # Calculate the reward based on updated distance
         reward = compute_reward(distance, prev_distance)
         prev_distance = distance
         total_reward += reward
 
+        # Check if the episode is done
         done = distance < 1  # Episode ends if robot reaches target
         agent.remember(state, action, reward, next_state, done)
 
         if done:
             break
-
+        
     agent.replay()
     return total_reward
 

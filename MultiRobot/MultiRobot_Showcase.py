@@ -7,10 +7,11 @@ from math import sqrt
 # Environment Parameters
 GRID_SIZE = 100
 TIME_STEP = 0.1
-MAX_SPEED = 20
-STATE_SIZE = 4  # [dx, dy, robot_vx, robot_vy]
-ACTION_SIZE = 5  # [up, down, left, right, stay]
 NUM_ROBOTS = 4
+MAX_SPEED = 20
+STATE_SIZE = 4 + 2 * (NUM_ROBOTS - 1)
+ACTION_SIZE = 5  # [up, down, left, right, stay]
+
 
 # Actor class for robots and target
 class Actor:
@@ -79,8 +80,13 @@ def load_model(model_path, state_size, action_size):
     except RuntimeError as e:
         print(f"Error loading state_dict: {e}")
         print("Attempting to remap keys...")
+
         pretrained_state = torch.load(model_path)
-        new_state = {key.replace("fc.", "fc"): value for key, value in pretrained_state.items()}
+        # Update keys to match current model
+        new_state = {
+            key.replace("fc0.", "fc.0.").replace("fc2.", "fc.2."): value
+            for key, value in pretrained_state.items()
+        }
         model.load_state_dict(new_state)
         print("Remapped model weights loaded successfully!")
     model.eval()
@@ -152,7 +158,22 @@ def run_simulation(model):
         # Update each robot
         for i, robot in enumerate(robots):
             dx, dy = target.x - robot.x, target.y - robot.y
-            state = [dx, dy, robot.vx, robot.vy]
+
+            # Add distances to other robots to the state
+            distances_to_others = []
+            for j, other_robot in enumerate(robots):
+                if i != j:
+                    dist_x = other_robot.x - robot.x
+                    dist_y = other_robot.y - robot.y
+                    distances_to_others.extend([dist_x, dist_y])
+
+            # Create the state vector with velocities and distances
+            state = [dx, dy, robot.vx, robot.vy] + distances_to_others
+
+            # Normalize the state
+            state = [s / GRID_SIZE for s in state]
+
+            # Choose the action
             action = choose_action(state, model)
 
             # Update robot velocity based on action
@@ -167,7 +188,10 @@ def run_simulation(model):
             else:  # stay
                 robot.set_velocity(0, 0)
 
+            # Update the robot's position
             robot.update_position()
+
+            # Compute the distance and reward
             distance = sqrt(dx**2 + dy**2)
             _ = compute_reward(distance, prev_distances[i], i, robots)
             prev_distances[i] = distance
@@ -179,10 +203,7 @@ def run_simulation(model):
         target_dot.set_data([target.x], [target.y])
         return robot_dots + [target_dot]
 
-    # Note: Removed blit=True to avoid issues with multiple artists
-    ani = FuncAnimation(fig, update, frames=200, init_func=init)
-
-    print("Running simulation with multiple robots. Close the window to finish.")
+    ani = FuncAnimation(fig, update, init_func=init, frames=200, interval=50, blit=True)
     plt.show()
 
 # Main function
