@@ -10,21 +10,15 @@ import matplotlib.pyplot as plt
 GRID_SIZE = 100
 TIME_STEP = 0.1
 MAX_SPEED = 10
-VISUALIZATION = False
+USE_TRANSFORMER = False  # Set to False to use SimpleNN
 
 # Patrol Formation Parameters
 PATROL_RADIUS = 4
-PATROL_POSITIONS = [
-    (50 + PATROL_RADIUS, 50),
-    (50 - PATROL_RADIUS, 50),
-    (50, 50 + PATROL_RADIUS),
-    (50, 50 - PATROL_RADIUS)
-]
 
 # Target Parameters
 NUM_ROBOTS = 4
 NUM_TARGETS = 2
-DETECTION_RADIUS = 15
+DETECTION_RADIUS = 10
 KILL_RADIUS = 2
 
 # RL Parameters
@@ -32,8 +26,8 @@ KILL_RADIUS = 2
 STATE_DIM = 4 + (NUM_TARGETS * 2) + ((NUM_ROBOTS - 1) * 2)
 ACTION_SIZE = 5
 GAMMA = 0.9
-LR = 0.0005
-BATCH_SIZE = 128
+LR = 0.05
+BATCH_SIZE = 256
 
 # Action Map
 ACTION_MAP = {
@@ -50,18 +44,50 @@ class CentralObject:
         self.y = y
 
 class AdversarialTarget:
-    def __init__(self, x, y, max_speed):
-        self.x = x
-        self.y = y
+    def __init__(self, waypoints, max_speed):
+        """
+        Initialize the target with a set of waypoints and a maximum speed.
+        
+        Args:
+            waypoints (list of tuples): Sequence of waypoints (x, y) the target will follow.
+            max_speed (float): Maximum speed of the target.
+        """
+        self.waypoints = waypoints  # List of waypoints
+        self.current_waypoint_idx = 0  # Start at the first waypoint
+        self.x, self.y = self.waypoints[self.current_waypoint_idx]  # Start at the first waypoint
         self.max_speed = max_speed
 
-    def update_random(self):
-        angle = np.random.uniform(0, 2*np.pi)
-        speed = np.random.uniform(0, self.max_speed)
-        self.x += speed * cos(angle) * TIME_STEP
-        self.y += speed * sin(angle) * TIME_STEP
-        self.x = np.clip(self.x, 0, GRID_SIZE)
-        self.y = np.clip(self.y, 0, GRID_SIZE)
+    def move_to_next_waypoint(self):
+        """
+        Move toward the current waypoint. If the waypoint is reached, advance to the next waypoint.
+        """
+        # Current waypoint coordinates
+        target_x, target_y = self.waypoints[self.current_waypoint_idx]
+
+        # Compute direction vector to the waypoint
+        direction_x = target_x - self.x
+        direction_y = target_y - self.y
+        distance_to_waypoint = sqrt(direction_x**2 + direction_y**2)
+
+        # Check if we reached the waypoint
+        if distance_to_waypoint < 0.1:  # Small threshold to consider the waypoint "reached"
+            # Advance to the next waypoint
+            self.current_waypoint_idx = (self.current_waypoint_idx + 1) % len(self.waypoints)
+            target_x, target_y = self.waypoints[self.current_waypoint_idx]  # Update to new waypoint
+            direction_x = target_x - self.x
+            direction_y = target_y - self.y
+            distance_to_waypoint = sqrt(direction_x**2 + direction_y**2)
+
+        # Normalize direction and move toward the waypoint
+        if distance_to_waypoint > 0:
+            norm_x = direction_x / distance_to_waypoint
+            norm_y = direction_y / distance_to_waypoint
+            self.x += norm_x * self.max_speed * TIME_STEP
+            self.y += norm_y * self.max_speed * TIME_STEP
+
+    def update(self):
+        """Update the target's position."""
+        self.move_to_next_waypoint()
 
 class Actor:
     def __init__(self, x, y, max_speed):
@@ -93,9 +119,49 @@ class SimpleNN(nn.Module):
     def forward(self, x):
         return self.fc(x)
 
+class TransformerNN(nn.Module):
+    def __init__(self, state_dim, action_size, num_heads=4, num_layers=2):
+        super(TransformerNN, self).__init__()
+        self.state_dim = state_dim
+
+        # Input Embedding
+        self.input_embedding = nn.Linear(state_dim, 64)
+
+        # Positional Encoding
+        self.positional_encoding = nn.Parameter(torch.zeros(1, state_dim, 64))
+
+        # Transformer Encoder
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=64, nhead=num_heads, dim_feedforward=128
+        )
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers)
+
+        # Fully Connected Layers
+        self.fc = nn.Sequential(
+            nn.Linear(64, 128),
+            nn.ReLU(),
+            nn.Linear(128, 64),
+            nn.ReLU(),
+            nn.Linear(64, action_size)
+        )
+
+    def forward(self, x):
+        # Add positional encoding to input embedding
+        x = self.input_embedding(x) + self.positional_encoding[:, :x.size(1), :]
+        
+        # Pass through transformer encoder
+        x = self.transformer_encoder(x)
+
+        # Aggregate features (mean pooling) and pass through dense layers
+        x = torch.mean(x, dim=1)
+        return self.fc(x)
+    
 class Agent:
     def __init__(self, state_dim, action_size):
-        self.policy_network = SimpleNN(state_dim, action_size)
+        if USE_TRANSFORMER:
+            self.policy_network = TransformerNN(state_dim, action_size)
+        else:
+            self.policy_network = SimpleNN(state_dim, action_size)
         self.optimizer = optim.Adam(self.policy_network.parameters(), lr=LR)
         self.memory = deque(maxlen=5000)
 
@@ -138,175 +204,120 @@ def normalize_state(vals):
     # Normalize positions by GRID_SIZE and velocities by MAX_SPEED
     normalized = []
     for i, v in enumerate(vals):
-        if i % 2 == 0 or i == 0: # if dealing with an x or dx
-            normalized.append(v / GRID_SIZE)
-        else:
-            normalized.append(v / GRID_SIZE)
+        normalized.append(v / GRID_SIZE)
+    
+    # Pad the state with zeros to match STATE_DIM if targets are not included
+    while len(normalized) < STATE_DIM:
+        normalized.append(0.0)
+    
     return normalized
 
-def compute_reward(robot, robot_idx, robots, targets, central_obj, 
-                   prev_patrol_dist, prev_target_dist):
+def compute_reward(curr_patrol_dist, prev_patrol_dist, robots, other_robot_distances):
     """
-    Compute the reward for a single robot at the current timestep.
-    
-    Args:
-        robot: The current robot being evaluated.
-        robot_idx: Index of the robot.
-        robots: List of all robots (including the current one).
-        targets: List of adversarial targets.
-        central_obj: The central object.
-        prev_patrol_dist: The robot's patrol distance at the previous timestep.
-        prev_target_dist: The robot's closest target distance at the previous timestep.
-    
-    Returns:
-        reward: A floating point reward value.
-        curr_patrol_dist: The current patrol distance (to be stored for the next step).
-        curr_target_dist: The current closest target distance (to be stored for the next step).
+    Compute the reward for a robot based only on its patrol behavior and avoiding collisions.
     """
-    # Patrol behavior: Encourage staying near the patrol position
-    desired_x, desired_y = PATROL_POSITIONS[robot_idx]
-    curr_patrol_dist = sqrt((robot.x - desired_x)**2 + (robot.y - desired_y)**2)
+    # Base reward: closer to patrol position is better
+    #reward = 0
+    reward = -curr_patrol_dist / GRID_SIZE
 
-    # Reward for staying near the patrol position
-    if curr_patrol_dist < PATROL_RADIUS:
-        reward = 1.0  # Strong reward for being close to patrol position
-    else:
-        # Penalty proportional to distance away from patrol position
-        reward = - (curr_patrol_dist / GRID_SIZE)
-
-    # If the robot moved closer to its patrol position, add a small incremental reward
     if prev_patrol_dist is not None and curr_patrol_dist < prev_patrol_dist:
-        reward += 0.2  # Encourage incremental improvement
+        reward += 1.5  # Reward for improving patrol position
 
-    # Penalize unnecessary movement if no target is nearby
-    if curr_patrol_dist > PATROL_RADIUS:
-        reward -= (robot.vx**2 + robot.vy**2) * 0.01  # Small penalty for high velocity
-
-    # Target behavior: Encourage chasing only if the target is near the central object
-    min_target_dist = float('inf')
-    target_near_central = False
-    cx, cy = central_obj.x, central_obj.y
-
-    for t in targets:
-        dist_to_robot = sqrt((t.x - robot.x)**2 + (t.y - robot.y)**2)
-        dist_to_central = sqrt((t.x - cx)**2 + (t.y - cy)**2)
-
-        if dist_to_robot < min_target_dist:
-            min_target_dist = dist_to_robot
-
-        # Check if target is within the detection radius of the central object
-        if dist_to_central < DETECTION_RADIUS:
-            target_near_central = True
-
-    curr_target_dist = min_target_dist
-
-    if target_near_central:
-        # Reward movement toward the target if it's near the central object
-        reward += - (curr_target_dist / GRID_SIZE)
-
-        # Additional reward for moving closer to the target
-        if prev_target_dist is not None and curr_target_dist < prev_target_dist:
-            reward += 0.5
-
-        # If robot intercepts the target (within KILL_RADIUS), give a large reward
-        if curr_target_dist < KILL_RADIUS:
-            reward += 5.0  # Strong reward for successful interception
-    else:
-        # Penalize moving away from the patrol position when no target is near
-        reward -= (curr_patrol_dist / GRID_SIZE) * 0.5
-
-    # Collision penalty: Check distance to other robots
-    for j, other_robot in enumerate(robots):
-        if j != robot_idx:
-            dist = sqrt((other_robot.x - robot.x)**2 + (other_robot.y - robot.y)**2)
-            if dist < 1:  # Collision threshold
-                reward -= 2.0  # Strong penalty for collisions
-
-    # Optional: Clip reward if desired (to prevent extreme values)
-    reward = max(min(reward, 5.0), -5.0)
-
-    return reward, curr_patrol_dist, curr_target_dist
+    # Collision penalty: Penalize for being too close to other robots
+    for dist in other_robot_distances:
+        if dist == (0, 0):  # Collision or very close proximity
+            reward -= 0.5  # Strong penalty for collisions
+    """
+    if detection (robot enteres detection radius):
+        set reward to 0
+        add reward for reducing distance to targets for 1 robot currently closest to target
+        penalize if more than 1 robot intercepts the target (keep the rest on patrol)
+    """
+    # Limit reward to a reasonable range
+    return max(-10, min(1, reward))
 
 def run_simulation(agent, robots, targets, central_obj, num_steps=200, epsilon=0.1):
+    """
+    Run the patrol simulation where robots only patrol the central object.
+    Targets remain in the simulation for dynamics but do not affect rewards.
+    """
     total_rewards = [0] * len(robots)
-    
-    # Initialize previous distances for each robot
     prev_patrol_distances = [None] * len(robots)
-    prev_target_distances = [None] * len(robots)
 
     for step in range(num_steps):
-        # Update targets positions
+        # Update target positions (purely for dynamics)
         for t in targets:
-            t.update_random()
+            t.update()
 
         for i, robot in enumerate(robots):
+            # Compute patrol distance
+            desired_x, desired_y = PATROL_POSITIONS[i]
+            curr_patrol_dist = sqrt((robot.x - desired_x)**2 + (robot.y - desired_y)**2)
+
+            # Compute distances to other robots
+            other_robot_distances = [
+                sqrt((other_robot.x - robot.x)**2 + (other_robot.y - robot.y)**2)
+                for j, other_robot in enumerate(robots) if j != i
+            ]
+
             # Create state
-            # Robot states: (x, y, vx, vy)
-            # Targets: (dx_t, dy_t) for each target
-            # Other robots: (dx_r, dy_r) for each other robot
-            dx_targets = []
-            for tar in targets:
-                dx_targets.append(tar.x - robot.x)
-                dx_targets.append(tar.y - robot.y)
+            state = normalize_state([robot.x, robot.y, robot.vx, robot.vy] + [
+                other_robot.x - robot.x for other_robot in robots if other_robot != robot
+            ] + [
+                other_robot.y - robot.y for other_robot in robots if other_robot != robot
+            ])
 
-            dx_robots = []
-            for j, other_robot in enumerate(robots):
-                if j != i:
-                    dx_robots.append(other_robot.x - robot.x)
-                    dx_robots.append(other_robot.y - robot.y)
-
-            state = [robot.x, robot.y, robot.vx, robot.vy] + dx_targets + dx_robots
-            state = normalize_state(state)
-
-            # Act
+            # Choose action and update robot's position
             action = agent.act(state, epsilon)
             ax, ay = ACTION_MAP[action]
             robot.set_velocity(ax, ay)
             robot.update_position()
 
-        # After all robots move, compute rewards and update distances
-        for i, robot in enumerate(robots):
-            # Compute reward
-            reward, curr_patrol_dist, curr_target_dist = compute_reward(
-                robot, 
-                i, 
-                robots, 
-                targets, 
-                central_obj, 
-                prev_patrol_distances[i], 
-                prev_target_distances[i]
-            )
-            
+            # Compute reward based on patrol behavior only
+            reward = compute_reward(curr_patrol_dist, prev_patrol_distances[i], robots, other_robot_distances)
             total_rewards[i] += reward
 
-            # Update previous distances for the next timestep
+            # Update patrol distance for the next step
             prev_patrol_distances[i] = curr_patrol_dist
-            prev_target_distances[i] = curr_target_dist
 
-        # At the end of the step, we replay once
+        # Replay experiences for learning
         agent.replay()
 
     return sum(total_rewards)
 
 # Main Training Loop
 central_obj = CentralObject(50, 50)
+PATROL_POSITIONS = [
+    (central_obj.x + PATROL_RADIUS, central_obj.y),
+    (central_obj.x - PATROL_RADIUS, central_obj.y),
+    (central_obj.x, central_obj.y + PATROL_RADIUS),
+    (central_obj.x, central_obj.y - PATROL_RADIUS)
+]
 agent = Agent(STATE_DIM, ACTION_SIZE)
 
 rewards = []
 for episode in range(10000):
-    # Reinitialize the environment if desired
-    robots = [Actor(x, y, MAX_SPEED) for (x, y) in PATROL_POSITIONS]
-    targets = [AdversarialTarget(np.random.uniform(0, GRID_SIZE), np.random.uniform(0, GRID_SIZE), MAX_SPEED) for _ in range(NUM_TARGETS)]
-
     epsilon = max(0.1, 1 - episode / 1000)
+
+    # Reset robots and targets for each episode
+    robots = [Actor(x, y, MAX_SPEED) for (x, y) in PATROL_POSITIONS]
+    waypoints_target_1 = [(48, 48), (48, 82), (12, 82), (12, 48)]
+    waypoints_target_2 = [(31, 51), (91, 51), (91, 13), (31, 13)]
+    targets = [
+        AdversarialTarget(waypoints=waypoints_target_1, max_speed=MAX_SPEED),
+        AdversarialTarget(waypoints=waypoints_target_2, max_speed=MAX_SPEED)
+    ]
+
+    # Run simulation
     total_reward = run_simulation(agent, robots, targets, central_obj, epsilon=epsilon)
     rewards.append(total_reward)
     print(f"Episode: {episode + 1}, Total Reward: {total_reward}")
 
+# Plot results
 plt.plot(rewards)
 plt.xlabel("Episode")
 plt.ylabel("Total Reward (All Robots)")
-plt.title("Reward Progression with Patrol and Intercept Task")
+plt.title("Reward Progression for Patrol Task")
 plt.show()
 
 torch.save(agent.policy_network.state_dict(), "multi_robot_patrol_model.pth")
