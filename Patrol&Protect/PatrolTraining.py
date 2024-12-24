@@ -11,7 +11,7 @@ GRID_SIZE = 1000
 TIME_STEP = 0.1
 MAX_SPEED = 10
 USE_TRANSFORMER = False  # Set to False to use SimpleNN
-EPISODES = 30000
+EPISODES = 10000
 
 # Patrol Formation Parameters
 PATROL_RADIUS = sqrt(2**2 + 2**2)
@@ -100,15 +100,15 @@ def compute_reward(curr_patrol_dist, prev_patrol_dist, robots, other_robot_dista
     Compute the reward for a singular robot 
     """
     # Base reward: closer to patrol position is better
-    #eward = 0
-    reward = -curr_patrol_dist / GRID_SIZE
+    #reward = 0
+    reward = -curr_patrol_dist / 100
     if prev_patrol_dist is not None and curr_patrol_dist < prev_patrol_dist:
-        reward += 0.5  # Reward for improving patrol position
+        reward += 1  # Reward for improving patrol position
 
     # Collision penalty: Penalize for being too close to other robots
     for dist in other_robot_distances:
-        if dist == (0, 0):  # Collision or very close proximity
-            reward -= 0.5  # Strong penalty for collisions
+        if dist < 0.5:  # Example threshold
+            reward -= -0.5
     """
     TODO: if detection (robot enteres detection radius):
         set reward to 0
@@ -116,7 +116,7 @@ def compute_reward(curr_patrol_dist, prev_patrol_dist, robots, other_robot_dista
         penalize if more than 1 robot intercepts the target (keep the rest on patrol)
     """
     # Limit reward to a reasonable range
-    return max(-10, min(1, reward))
+    return max(-10, min(10,reward))
 
 def run_simulation(agent, robots, targets, central_obj, num_steps=200, epsilon=0.1):
     total_rewards = [0] * len(robots)
