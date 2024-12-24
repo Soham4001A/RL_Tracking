@@ -10,8 +10,8 @@ import matplotlib.pyplot as plt
 GRID_SIZE = 100
 TIME_STEP = 0.1
 MAX_SPEED = 10
-USE_TRANSFORMER = False  # Set to False to use SimpleNN
-EPISODES = 1000
+USE_TRANSFORMER = True  # Set to False to use SimpleNN
+EPISODES = 10000
 
 # Patrol Formation Parameters
 PATROL_RADIUS = 4
