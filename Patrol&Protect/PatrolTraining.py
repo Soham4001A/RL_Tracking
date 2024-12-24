@@ -93,7 +93,7 @@ class Agent:
         torch.nn.utils.clip_grad_norm_(self.policy_network.parameters(), max_norm=1)
         self.optimizer.step()
 
-def comppute_reward(curr_patrol_dist, prev_patrol_dist, robots, other_robot_distances):
+def compute_reward(curr_patrol_dist, prev_patrol_dist, robots, other_robot_distances):
     """
     Compute the reward for a singular robot 
     """
