@@ -11,6 +11,7 @@ GRID_SIZE = 100
 TIME_STEP = 0.1
 MAX_SPEED = 10
 USE_TRANSFORMER = False  # Set to False to use SimpleNN
+EPISODES = 1000
 
 # Patrol Formation Parameters
 PATROL_RADIUS = 4
@@ -23,13 +24,13 @@ KILL_RADIUS = 2
 
 # RL Parameters
 # State: (robot_x, robot_y, vx, vy) + 2 targets (dx, dy each) + 3 other robots (dx, dy each)
-STATE_DIM = 4 + (NUM_TARGETS * 2) + ((NUM_ROBOTS - 1) * 2)
+STATE_DIM = 4 + (NUM_TARGETS * 2) + ((NUM_ROBOTS - 1) * 2) + 2 
 ACTION_SIZE = 5
 GAMMA = 0.9
 LR = 0.05
 BATCH_SIZE = 256
 
-# Action Map
+# Action Maps
 ACTION_MAP = {
     0: (0, MAX_SPEED),    # Up
     1: (0, -MAX_SPEED),   # Down
@@ -204,9 +205,14 @@ def normalize_state(vals):
     # Normalize positions by GRID_SIZE and velocities by MAX_SPEED
     normalized = []
     for i, v in enumerate(vals):
-        normalized.append(v / GRID_SIZE)
+        if i < 2:  # Positions
+            normalized.append(v / GRID_SIZE)
+        elif i < 4:  # Velocities
+            normalized.append(v / MAX_SPEED)
+        else:  # Relative positions
+            normalized.append(v / GRID_SIZE)
     
-    # Pad the state with zeros to match STATE_DIM if targets are not included
+    # Pad the state with zeros to match STATE_DIM if necessary
     while len(normalized) < STATE_DIM:
         normalized.append(0.0)
     
@@ -236,6 +242,14 @@ def compute_reward(curr_patrol_dist, prev_patrol_dist, robots, other_robot_dista
     # Limit reward to a reasonable range
     return max(-10, min(1, reward))
 
+def get_patrol_positions(central_obj):
+    return [
+        (central_obj.x + PATROL_RADIUS, central_obj.y),
+        (central_obj.x - PATROL_RADIUS, central_obj.y),
+        (central_obj.x, central_obj.y + PATROL_RADIUS),
+        (central_obj.x, central_obj.y - PATROL_RADIUS)
+    ]
+
 def run_simulation(agent, robots, targets, central_obj, num_steps=200, epsilon=0.1):
     """
     Run the patrol simulation where robots only patrol the central object.
@@ -249,6 +263,9 @@ def run_simulation(agent, robots, targets, central_obj, num_steps=200, epsilon=0
         for t in targets:
             t.update()
 
+        # Dynamically compute patrol positions based on central_obj's current position
+        PATROL_POSITIONS = get_patrol_positions(central_obj)
+
         for i, robot in enumerate(robots):
             # Compute patrol distance
             desired_x, desired_y = PATROL_POSITIONS[i]
@@ -261,10 +278,17 @@ def run_simulation(agent, robots, targets, central_obj, num_steps=200, epsilon=0
             ]
 
             # Create state
-            state = normalize_state([robot.x, robot.y, robot.vx, robot.vy] + [
+            state = normalize_state([
+                robot.x, robot.y, robot.vx, robot.vy,
+                central_obj.x, central_obj.y
+            ] + [
                 other_robot.x - robot.x for other_robot in robots if other_robot != robot
             ] + [
                 other_robot.y - robot.y for other_robot in robots if other_robot != robot
+            ] + [
+                target.x - robot.x for target in targets
+            ] + [
+                target.y - robot.y for target in targets
             ])
 
             # Choose action and update robot's position
@@ -287,19 +311,16 @@ def run_simulation(agent, robots, targets, central_obj, num_steps=200, epsilon=0
 
 # Main Training Loop
 central_obj = CentralObject(50, 50)
-PATROL_POSITIONS = [
-    (central_obj.x + PATROL_RADIUS, central_obj.y),
-    (central_obj.x - PATROL_RADIUS, central_obj.y),
-    (central_obj.x, central_obj.y + PATROL_RADIUS),
-    (central_obj.x, central_obj.y - PATROL_RADIUS)
-]
 agent = Agent(STATE_DIM, ACTION_SIZE)
 
 rewards = []
-for episode in range(10000):
+for episode in range(EPISODES):
     epsilon = max(0.1, 1 - episode / 1000)
 
-    # Reset robots and targets for each episode
+    # Dynamically compute patrol positions
+    PATROL_POSITIONS = get_patrol_positions(central_obj)
+
+    # Reset robots and targets for each episode based on current patrol positions
     robots = [Actor(x, y, MAX_SPEED) for (x, y) in PATROL_POSITIONS]
     waypoints_target_1 = [(48, 48), (48, 82), (12, 82), (12, 48)]
     waypoints_target_2 = [(31, 51), (91, 51), (91, 13), (31, 13)]

@@ -27,10 +27,7 @@ PATROL_POSITIONS = [
 ]
 
 # State and Action Spaces (Adjust as per your model)
-# Example state: [robot_x, robot_y, vx, vy] + two targets positions (dx, dy) each + other robots
-# Make sure you align this with how your model was trained
-# Here we assume a placeholder state size and action space similar to previous code
-STATE_SIZE = 4 + (NUM_TARGETS * 2) + ((NUM_ROBOTS - 1)*2)  # Adjust if needed
+STATE_SIZE = 4 + (NUM_TARGETS * 2) + ((NUM_ROBOTS - 1)*2) + 2  # Include central_obj's position
 ACTION_SIZE = 5  # [up, down, left, right, stay]
 ACTIONS = {
     0: (0, MAX_SPEED),    # up
@@ -179,18 +176,28 @@ def normalize_state(vals):
     for i, v in enumerate(vals):
         if i < 2:  # Positions normalized by GRID_SIZE
             normalized.append(v / GRID_SIZE)
-        else:  # Velocities normalized by MAX_SPEED
+        elif i < 4:  # Velocities normalized by MAX_SPEED
             normalized.append(v / MAX_SPEED)
+        else:  # Relative positions normalized by GRID_SIZE
+            normalized.append(v / GRID_SIZE)
     while len(normalized) < STATE_SIZE:
         normalized.append(0.0)
     return normalized
+
+def get_patrol_positions(central_obj):
+    return [
+        (central_obj.x + PATROL_RADIUS, central_obj.y),
+        (central_obj.x - PATROL_RADIUS, central_obj.y),
+        (central_obj.x, central_obj.y + PATROL_RADIUS),
+        (central_obj.x, central_obj.y - PATROL_RADIUS)
+    ]
 
 def run_simulation(model):
     # Create a central object
     central_obj = CentralObject(CENTRAL_X, CENTRAL_Y)
 
     # Initialize robots in patrol formation
-    robots = [Actor(px, py, MAX_SPEED) for (px, py) in PATROL_POSITIONS]
+    robots = [Actor(px, py, MAX_SPEED) for (px, py) in get_patrol_positions(central_obj)]
 
     # Define waypoints for Target 1 (around 48, 48) and Target 2 (around 51, 51)
     waypoints_target_1 = [(48, 48), (48, 82), (12, 82), (12, 48)]
@@ -238,9 +245,11 @@ def run_simulation(model):
         for t in targets:
             t.update()
 
+        # Dynamically compute patrol positions based on central_obj's current position
+        PATROL_POSITIONS = get_patrol_positions(central_obj)
+
         for i, robot in enumerate(robots):
             # Compute state
-            # State: robot_x, robot_y, vx, vy, targets(dx, dy for each), other_robots(dx, dy for each)
             dx_targets = []
             for tar in targets:
                 dx_targets.append(tar.x - robot.x)
@@ -253,11 +262,7 @@ def run_simulation(model):
                     dx_robots.append(other_robot.y - robot.y)
 
             state = [robot.x, robot.y, robot.vx, robot.vy] + dx_targets + dx_robots
-            state = normalize_state([robot.x, robot.y, robot.vx, robot.vy] + [
-                other_robot.x - robot.x for other_robot in robots if other_robot != robot
-            ] + [
-                other_robot.y - robot.y for other_robot in robots if other_robot != robot
-            ])
+            state = normalize_state(state)
 
             # Choose action from model
             action = choose_action(state, model)
@@ -271,6 +276,9 @@ def run_simulation(model):
 
         for i, tar in enumerate(targets):
             target_dots[i].set_data([tar.x], [tar.y])
+
+        # Update central object position if it's moving
+        central_dot.set_data([central_obj.x], [central_obj.y])
 
         return robot_dots + target_dots + [central_dot]
 
