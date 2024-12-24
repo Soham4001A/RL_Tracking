@@ -11,3 +11,6 @@ Next Steps:
 4. Experiment moving to 3rd dimension
 
 5. Add further control polciies
+
+
+TODO: Break down PPO and learn it. Teach myself the PPO script
