@@ -34,6 +34,8 @@ class UpdatedModel(torch.nn.Module):
         self.fc = torch.nn.Sequential(
             torch.nn.Linear(state_size, 64),
             torch.nn.ReLU(),
+            torch.nn.ReLU(),
+            torch.nn.ReLU(),
             torch.nn.Linear(64, action_size)
         )
 

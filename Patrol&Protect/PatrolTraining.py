@@ -11,7 +11,7 @@ GRID_SIZE = 1000
 TIME_STEP = 0.1
 MAX_SPEED = 10
 USE_TRANSFORMER = False  # Set to False to use SimpleNN
-EPISODES = 10000
+EPISODES = 30000
 
 # Patrol Formation Parameters
 PATROL_RADIUS = sqrt(2**2 + 2**2)
@@ -45,6 +45,8 @@ class SimpleNN(torch.nn.Module):
         super(SimpleNN, self).__init__()
         self.fc = torch.nn.Sequential(
             torch.nn.Linear(state_dim, 64),
+            torch.nn.ReLU(),
+            torch.nn.ReLU(),
             torch.nn.ReLU(),
             torch.nn.Linear(64, action_size)
         )
@@ -163,11 +165,11 @@ def run_simulation(agent, robots, targets, central_obj, num_steps=200, epsilon=0
                 prev_patrol_dist=prev_patrol_distances[i],
                 robots=robots,
                 other_robot_distances=other_robot_distances,
-                detection_radius=DETECTION_RADIUS,
-                target_distances=[
-                    sqrt((target.x - robot.x)**2 + (target.y - robot.y)**2)
-                    for target in targets
-                ]
+                #detection_radius=DETECTION_RADIUS,
+                #target_distances=[
+                #    sqrt((target.x - robot.x)**2 + (target.y - robot.y)**2)
+                #    for target in targets
+                #]
             )
             total_rewards[i] += reward
             prev_patrol_distances[i] = curr_patrol_dist
