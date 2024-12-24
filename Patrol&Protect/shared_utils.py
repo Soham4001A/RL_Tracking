@@ -7,6 +7,9 @@ from torch import nn
 GRID_SIZE = 1000
 TIME_STEP = 0.1
 
+#Patrol Radius
+PATROL_RADIUS = sqrt((3)**2+(3)**2)
+
 # Action Maps
 ACTION_MAP = {
     0: (0, 10),    # Up
@@ -109,7 +112,7 @@ class AdversarialTarget:
         self.move_to_next_waypoint()
 
 
-# Actor Class
+# Actor Class - Used for Simulation
 class Actor:
     def __init__(self, x, y, max_speed):
         self.x = x
@@ -150,7 +153,7 @@ def normalize_state(vals, state_dim, grid_size=GRID_SIZE, max_speed=10):
     return normalized
 
 
-def get_patrol_positions(central_obj, patrol_radius):
+def get_patrol_positions(central_obj, patrol_radius=PATROL_RADIUS):
     """Get patrol positions around the central object."""
     return [
         (central_obj.x + patrol_radius, central_obj.y),

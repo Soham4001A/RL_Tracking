@@ -6,6 +6,8 @@ Next Steps:
 
 3. Experiment 'protect a target' policy with 'kill' mechanism
 
+3.5 Move to a different Training vs Simulation dataset
+
 4. Experiment moving to 3rd dimension
 
 5. Add further control polciies
