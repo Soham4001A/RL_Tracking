@@ -6,10 +6,10 @@ from matplotlib.animation import FuncAnimation
 from math import sqrt, cos, sin, pi
 
 # Environment Parameters
-GRID_SIZE = 100
+GRID_SIZE = 1000
 TIME_STEP = 0.1
 NUM_ROBOTS = 4
-NUM_TARGETS = 2
+NUM_TARGETS = 15
 MAX_SPEED = 20
 DETECTION_RADIUS = 15 # Fix This
 KILL_RADIUS = 2 #Fix This
@@ -52,9 +52,62 @@ class Actor:
         self.y = np.clip(self.y, 0, GRID_SIZE)
 
 class CentralObject:
-    def __init__(self, x, y):
+    def __init__(self, x, y, max_speed=5, waypoints=None):
         self.x = x
         self.y = y
+        self.vx = 0
+        self.vy = 0
+        self.max_speed = max_speed
+        self.waypoints = waypoints or []
+        self.current_waypoint_idx = 0
+
+    def move_to_next_waypoint(self):
+        """Move toward the current waypoint."""
+        if not self.waypoints:
+            return
+
+        target_x, target_y = self.waypoints[self.current_waypoint_idx]
+        direction_x = target_x - self.x
+        direction_y = target_y - self.y
+        distance = sqrt(direction_x**2 + direction_y**2)
+
+        # If close to the waypoint, move to the next one
+        if distance < 1:
+            self.current_waypoint_idx = (self.current_waypoint_idx + 1) % len(self.waypoints)
+        else:
+            norm_x = direction_x / distance
+            norm_y = direction_y / distance
+            self.set_velocity(norm_x * self.max_speed, norm_y * self.max_speed)
+
+        # Update position based on the set velocity
+        self.update_position()
+        
+    def random_walk(self):
+        """Perform a random walk."""
+        if np.random.rand() < 0.1:  # 10% chance to change direction
+            vx = np.random.uniform(-self.max_speed, self.max_speed)
+            vy = np.random.uniform(-self.max_speed, self.max_speed)
+            self.set_velocity(vx, vy)
+        self.update_position()
+
+    def set_velocity(self, vx, vy):
+        """Set the velocity of the central object."""
+        self.vx = np.clip(vx, -self.max_speed, self.max_speed)
+        self.vy = np.clip(vy, -self.max_speed, self.max_speed)
+
+    def update_position(self):
+        """Update the position of the central object."""
+        self.x += self.vx * TIME_STEP
+        self.y += self.vy * TIME_STEP
+        self.x = np.clip(self.x, 0, GRID_SIZE)
+        self.y = np.clip(self.y, 0, GRID_SIZE)
+
+    def update(self, random_walk=False):
+        """Update the central object's position."""
+        if random_walk:
+            self.random_walk()
+        else:
+            self.move_to_next_waypoint()
 
 class AdversarialTarget:
     def __init__(self, waypoints, max_speed):
@@ -190,19 +243,63 @@ def get_patrol_positions(central_obj):
 
 def run_simulation(model):
     # Create a central object
-    central_obj = CentralObject(CENTRAL_X, CENTRAL_Y)
+    # Define waypoints for the central object (e.g., square path)
+    central_waypoints = [(200, 200), (800, 200), (800, 800), (200, 800)]
+    central_obj = CentralObject(central_waypoints[0][0], central_waypoints[0][1], max_speed=8, waypoints=central_waypoints)
 
     # Initialize robots in patrol formation
     robots = [Actor(px, py, MAX_SPEED) for (px, py) in get_patrol_positions(central_obj)]
 
-    # Define waypoints for Target 1 (around 48, 48) and Target 2 (around 51, 51)
-    waypoints_target_1 = [(48, 48), (48, 82), (12, 82), (12, 48)]
-    waypoints_target_2 = [(31, 51), (91, 51), (91, 13), (31, 13)]
+    # Define updated waypoints for 15 targets
+    waypoints_targets = [
+        # Target 1: Circular path (centered at 500, 500 with a radius of 100)
+        [(500 + 100 * cos(i * 2 * pi / 8), 500 + 100 * sin(i * 2 * pi / 8)) for i in range(8)],
 
-    # Initialize the adversarial targets
+        # Target 2: Square path (bottom-left corner at 200, 200 with a side length of 200)
+        [(200, 200), (200, 400), (400, 400), (400, 200)],
+
+        # Target 3: Zig-zag path (vertical zig-zag in the left quadrant)
+        [(150, 100), (200, 300), (150, 500), (200, 700), (150, 900)],
+
+        # Target 4: Random walk path (scattered points in the grid)
+        [(np.random.randint(100, 900), np.random.randint(100, 900)) for _ in range(5)],
+
+        # Target 5: Diagonal line (from top-left to bottom-right quadrant)
+        [(i, i) for i in range(100, 900, 200)],
+
+        # Target 6: Figure 8 path (centered at 500, 500 with alternating radii)
+        [(500 + 100 * cos(i * pi / 4), 500 + 50 * sin(i * pi / 4) * (1 if i % 2 == 0 else -1)) for i in range(8)],
+
+        # Target 7: Small circle (centered at 300, 300 with a radius of 50)
+        [(300 + 50 * cos(i * 2 * pi / 8), 300 + 50 * sin(i * 2 * pi / 8)) for i in range(8)],
+
+        # Target 8: Larger square (bottom-left corner at 600, 600 with a side length of 300)
+        [(600, 600), (600, 900), (900, 900), (900, 600)],
+
+        # Target 9: Vertical zig-zag (centered at 700, vertical axis)
+        [(700, 100), (700, 300), (700, 500), (700, 700), (700, 900)],
+
+        # Target 10: Converging inward (diagonal inward from corners)
+        [(i, 1000 - i) for i in range(100, 900, 200)],
+
+        # Target 11: Horizontal zig-zag (centered at 500, horizontal axis)
+        [(100, 500), (300, 500), (500, 500), (700, 500), (900, 500)],
+
+        # Target 12: Elliptical path (centered at 500, 500 with radii 150 and 100)
+        [(500 + 150 * cos(i * 2 * pi / 8), 500 + 100 * sin(i * 2 * pi / 8)) for i in range(8)],
+
+        # Target 13: Figure 8 path (smaller scale centered at 400, 400)
+        [(400 + 50 * cos(i * pi / 4), 400 + 30 * sin(i * pi / 4) * (1 if i % 2 == 0 else -1)) for i in range(8)],
+
+        # Target 14: Static path (stationary at 800, 800)
+        [(800, 800)],
+
+        # Target 15: Random walk path (small random walk in the center)
+        [(np.random.randint(450, 550), np.random.randint(450, 550)) for _ in range(5)],
+    ]
     targets = [
-        AdversarialTarget(waypoints=waypoints_target_1, max_speed=MAX_SPEED),
-        AdversarialTarget(waypoints=waypoints_target_2, max_speed=MAX_SPEED)
+    AdversarialTarget(waypoints=waypoints_targets[i], max_speed=MAX_SPEED)
+    for i in range(NUM_TARGETS)
     ]
 
     fig, ax = plt.subplots()
@@ -237,7 +334,10 @@ def run_simulation(model):
         return robot_dots + target_dots + [central_dot]
 
     def update(frame):
-        # Update targets' positions (following their square patterns)
+        # Move the central object
+        central_obj.update(random_walk=False)  # Set random_walk=True if random movement is desired
+
+        # Update targets' positions
         for t in targets:
             t.update()
 
@@ -245,10 +345,6 @@ def run_simulation(model):
         PATROL_POSITIONS = get_patrol_positions(central_obj)
 
         for i, robot in enumerate(robots):
-            # Compute patrol distance
-            desired_x, desired_y = PATROL_POSITIONS[i]
-            #curr_patrol_dist = sqrt((robot.x - desired_x)**2 + (robot.y - desired_y)**2)
-
             # Compute distances to other robots
             other_robot_distances = [
                 sqrt((other_robot.x - robot.x)**2 + (other_robot.y - robot.y)**2)
@@ -270,19 +366,19 @@ def run_simulation(model):
             ])
 
             # Choose action and update robot's position
-            action = choose_action(state,model)
+            action = choose_action(state, model)
             ax, ay = ACTION_MAP[action]
             robot.set_velocity(ax, ay)
             robot.update_position()
 
-            # **Add Visualization Update Here**
+            # Update visualization for this robot
             robot_dots[i].set_data([robot.x], [robot.y])
 
         # Update visualization for targets
         for i, tar in enumerate(targets):
             target_dots[i].set_data([tar.x], [tar.y])
 
-        # Update central object position if it's moving (if applicable)
+        # Update central object position (visualization)
         central_dot.set_data([central_obj.x], [central_obj.y])
 
         return robot_dots + target_dots + [central_dot]

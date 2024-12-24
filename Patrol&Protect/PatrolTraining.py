@@ -7,7 +7,7 @@ from collections import deque
 import matplotlib.pyplot as plt
 
 # Environment Parameters
-GRID_SIZE = 100
+GRID_SIZE = 1000
 TIME_STEP = 0.1
 MAX_SPEED = 10
 USE_TRANSFORMER = False  # Set to False to use SimpleNN
@@ -16,11 +16,15 @@ EPISODES = 10000
 # Patrol Formation Parameters
 PATROL_RADIUS = sqrt((2)**2+(2)**2)
 
+# Central Obj Movement Control
+CENTRAL_OBJ_RANDOM_WALK = False
+CENTRAL_OBJ_WAYPOINT = True
+
 # Target Parameters
 NUM_ROBOTS = 4
-NUM_TARGETS = 2
-DETECTION_RADIUS = 10 #This needs to be based off the central obj
-KILL_RADIUS = sqrt((5)**2+(5)**2) # This needs to be based off the central obj
+NUM_TARGETS = 15
+DETECTION_RADIUS = PATROL_RADIUS * 1.5  # Scaled to central object size
+KILL_RADIUS = PATROL_RADIUS * 0.75  # Scaled to patrol radius
 
 # RL Parameters
 # State: (robot_x, robot_y, vx, vy) + 2 targets (dx, dy each) + 3 other robots (dx, dy each)
@@ -40,9 +44,62 @@ ACTION_MAP = {
 }
 
 class CentralObject:
-    def __init__(self, x, y):
+    def __init__(self, x, y, max_speed=5, waypoints=None):
         self.x = x
         self.y = y
+        self.vx = 0
+        self.vy = 0
+        self.max_speed = max_speed
+        self.waypoints = waypoints or []
+        self.current_waypoint_idx = 0
+
+    def move_to_next_waypoint(self):
+        """Move toward the current waypoint."""
+        if not self.waypoints:
+            return
+
+        target_x, target_y = self.waypoints[self.current_waypoint_idx]
+        direction_x = target_x - self.x
+        direction_y = target_y - self.y
+        distance = sqrt(direction_x**2 + direction_y**2)
+
+        # If close to the waypoint, move to the next one
+        if distance < 1:
+            self.current_waypoint_idx = (self.current_waypoint_idx + 1) % len(self.waypoints)
+        else:
+            norm_x = direction_x / distance
+            norm_y = direction_y / distance
+            self.set_velocity(norm_x * self.max_speed, norm_y * self.max_speed)
+
+        # Update position based on the set velocity
+        self.update_position()
+
+    def random_walk(self):
+        """Perform a random walk."""
+        if np.random.rand() < 0.1:  # 10% chance to change direction
+            vx = np.random.uniform(-self.max_speed, self.max_speed)
+            vy = np.random.uniform(-self.max_speed, self.max_speed)
+            self.set_velocity(vx, vy)
+        self.update_position()
+
+    def set_velocity(self, vx, vy):
+        """Set the velocity of the central object."""
+        self.vx = np.clip(vx, -self.max_speed, self.max_speed)
+        self.vy = np.clip(vy, -self.max_speed, self.max_speed)
+
+    def update_position(self):
+        """Update the position of the central object."""
+        self.x += self.vx * TIME_STEP
+        self.y += self.vy * TIME_STEP
+        self.x = np.clip(self.x, 0, GRID_SIZE)
+        self.y = np.clip(self.y, 0, GRID_SIZE)
+
+    def update(self, random_walk=False):
+        """Update the central object's position."""
+        if random_walk:
+            self.random_walk()
+        else:
+            self.move_to_next_waypoint()
 
 class AdversarialTarget:
     def __init__(self, waypoints, max_speed):
@@ -218,9 +275,9 @@ def normalize_state(vals):
     
     return normalized
 
-def compute_reward(curr_patrol_dist, prev_patrol_dist, robots, other_robot_distances):
+def compute_reward_old(curr_patrol_dist, prev_patrol_dist, robots, other_robot_distances):
     """
-    Compute the reward for a robot based only on its patrol behavior and avoiding collisions.
+    Compute the reward for a singular robot 
     """
     # Base reward: closer to patrol position is better
     #eward = 0
@@ -241,6 +298,55 @@ def compute_reward(curr_patrol_dist, prev_patrol_dist, robots, other_robot_dista
     # Limit reward to a reasonable range
     return max(-10, min(1, reward))
 
+def compute_reward(curr_patrol_dist, prev_patrol_dist, robots, other_robot_distances, detection_radius, target_distances):
+    """
+    Compute the reward for a robot based on patrol behavior, collision avoidance, 
+    and interaction with targets.
+    
+    Args:
+        curr_patrol_dist (float): Current distance from the patrol position.
+        prev_patrol_dist (float): Previous distance from the patrol position.
+        robots (list): List of all robots in the environment.
+        other_robot_distances (list): Distances to other robots.
+        detection_radius (float): Detection radius for target interaction.
+        target_distances (list): Distances to all targets.
+    
+    Returns:
+        float: Computed reward for the robot.
+    """
+    reward = 0
+
+    # Reward for maintaining or improving patrol position
+    reward -= curr_patrol_dist / GRID_SIZE  # Base penalty for being far from patrol position
+    if prev_patrol_dist is not None and curr_patrol_dist < prev_patrol_dist:
+        reward += 1.0  # Bonus for moving closer to patrol position
+
+    # Collision penalty: Penalize for being too close to other robots
+    for dist in other_robot_distances:
+        if dist < KILL_RADIUS:
+            reward -= 2.0  # Strong penalty for collisions
+
+    # Interaction with targets: Reward for entering detection radius
+    closest_target_dist = min(target_distances)
+    if closest_target_dist < detection_radius:
+        reward += 1.5  # Bonus for entering detection radius
+        # Additional bonus for being the closest robot to a target
+        if closest_target_dist == min(target_distances):  # Simplified line
+            reward += 0.5  # Additional reward for closest proximity to target
+
+    # Penalty for over-convergence on targets
+    num_robots_in_radius = sum(1 for dist in target_distances if dist < detection_radius)
+    if num_robots_in_radius > 1:
+        reward -= 0.5 * (num_robots_in_radius - 1)  # Penalize overcrowding
+
+    # Penalty for idleness (not moving significantly or staying far from patrol)
+    movement_penalty = 1.0 - (curr_patrol_dist / GRID_SIZE)
+    reward -= movement_penalty * 0.1  # Small penalty for idleness
+
+    # Limit reward to a reasonable range
+    reward = max(-10, min(5, reward))
+    return reward
+
 def get_patrol_positions(central_obj):
     return [
         (central_obj.x + PATROL_RADIUS, central_obj.y),
@@ -250,15 +356,14 @@ def get_patrol_positions(central_obj):
     ]
 
 def run_simulation(agent, robots, targets, central_obj, num_steps=200, epsilon=0.1):
-    """
-    Run the patrol simulation where robots only patrol the central object.
-    Targets remain in the simulation for dynamics but do not affect rewards.
-    """
     total_rewards = [0] * len(robots)
     prev_patrol_distances = [None] * len(robots)
 
     for step in range(num_steps):
-        # Update target positions (purely for dynamics)
+        # Move the central object
+        central_obj.update()
+
+        # Update target positions
         for t in targets:
             t.update()
 
@@ -266,7 +371,6 @@ def run_simulation(agent, robots, targets, central_obj, num_steps=200, epsilon=0
         PATROL_POSITIONS = get_patrol_positions(central_obj)
 
         for i, robot in enumerate(robots):
-
             # Compute distances to other robots
             other_robot_distances = [
                 sqrt((other_robot.x - robot.x)**2 + (other_robot.y - robot.y)**2)
@@ -298,7 +402,14 @@ def run_simulation(agent, robots, targets, central_obj, num_steps=200, epsilon=0
             curr_patrol_dist = sqrt((robot.x - desired_x)**2 + (robot.y - desired_y)**2)
 
             # Compute reward based on patrol behavior only
-            reward = compute_reward(curr_patrol_dist, prev_patrol_distances[i], robots, other_robot_distances)
+            reward = compute_reward(
+                curr_patrol_dist=curr_patrol_dist,
+                prev_patrol_dist=prev_patrol_distances[i],
+                robots=robots,
+                other_robot_distances=other_robot_distances,
+                detection_radius=DETECTION_RADIUS,
+                target_distances=[sqrt((target.x - robot.x)**2 + (target.y - robot.y)**2) for target in targets]
+            )
             total_rewards[i] += reward
 
             # Update patrol distance for the next step
@@ -310,7 +421,8 @@ def run_simulation(agent, robots, targets, central_obj, num_steps=200, epsilon=0
     return sum(total_rewards)
 
 # Main Training Loop
-central_obj = CentralObject(50, 50)
+central_waypoints = [(200, 200), (800, 200), (800, 800), (200, 800)]  # Square path
+central_obj = CentralObject(central_waypoints[0][0], central_waypoints[0][1], max_speed=5, waypoints=central_waypoints)
 agent = Agent(STATE_DIM, ACTION_SIZE)
 
 rewards = []
@@ -322,11 +434,56 @@ for episode in range(EPISODES):
 
     # Reset robots and targets for each episode based on current patrol positions
     robots = [Actor(x, y, MAX_SPEED) for (x, y) in PATROL_POSITIONS]
-    waypoints_target_1 = [(48, 48), (48, 82), (12, 82), (12, 48)]
-    waypoints_target_2 = [(31, 51), (91, 51), (91, 13), (31, 13)]
+    # Define updated waypoints for 15 targets
+    waypoints_targets = [
+        # Target 1: Circular path (centered at 500, 500 with a radius of 100)
+        [(500 + 100 * cos(i * 2 * pi / 8), 500 + 100 * sin(i * 2 * pi / 8)) for i in range(8)],
+
+        # Target 2: Square path (bottom-left corner at 200, 200 with a side length of 200)
+        [(200, 200), (200, 400), (400, 400), (400, 200)],
+
+        # Target 3: Zig-zag path (vertical zig-zag in the left quadrant)
+        [(150, 100), (200, 300), (150, 500), (200, 700), (150, 900)],
+
+        # Target 4: Random walk path (scattered points in the grid)
+        [(np.random.randint(100, 900), np.random.randint(100, 900)) for _ in range(5)],
+
+        # Target 5: Diagonal line (from top-left to bottom-right quadrant)
+        [(i, i) for i in range(100, 900, 200)],
+
+        # Target 6: Figure 8 path (centered at 500, 500 with alternating radii)
+        [(500 + 100 * cos(i * pi / 4), 500 + 50 * sin(i * pi / 4) * (1 if i % 2 == 0 else -1)) for i in range(8)],
+
+        # Target 7: Small circle (centered at 300, 300 with a radius of 50)
+        [(300 + 50 * cos(i * 2 * pi / 8), 300 + 50 * sin(i * 2 * pi / 8)) for i in range(8)],
+
+        # Target 8: Larger square (bottom-left corner at 600, 600 with a side length of 300)
+        [(600, 600), (600, 900), (900, 900), (900, 600)],
+
+        # Target 9: Vertical zig-zag (centered at 700, vertical axis)
+        [(700, 100), (700, 300), (700, 500), (700, 700), (700, 900)],
+
+        # Target 10: Converging inward (diagonal inward from corners)
+        [(i, 1000 - i) for i in range(100, 900, 200)],
+
+        # Target 11: Horizontal zig-zag (centered at 500, horizontal axis)
+        [(100, 500), (300, 500), (500, 500), (700, 500), (900, 500)],
+
+        # Target 12: Elliptical path (centered at 500, 500 with radii 150 and 100)
+        [(500 + 150 * cos(i * 2 * pi / 8), 500 + 100 * sin(i * 2 * pi / 8)) for i in range(8)],
+
+        # Target 13: Figure 8 path (smaller scale centered at 400, 400)
+        [(400 + 50 * cos(i * pi / 4), 400 + 30 * sin(i * pi / 4) * (1 if i % 2 == 0 else -1)) for i in range(8)],
+
+        # Target 14: Static path (stationary at 800, 800)
+        [(800, 800)],
+
+        # Target 15: Random walk path (small random walk in the center)
+        [(np.random.randint(450, 550), np.random.randint(450, 550)) for _ in range(5)],
+    ]
     targets = [
-        AdversarialTarget(waypoints=waypoints_target_1, max_speed=MAX_SPEED),
-        AdversarialTarget(waypoints=waypoints_target_2, max_speed=MAX_SPEED)
+    AdversarialTarget(waypoints=waypoints_targets[i], max_speed=MAX_SPEED)
+    for i in range(NUM_TARGETS)
     ]
 
     # Run simulation
