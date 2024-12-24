@@ -9,10 +9,10 @@ from shared_utils import CentralObject, AdversarialTarget, Actor, get_patrol_pos
 from PatrolTrainingPPO import PatrolEnv
 
 GRID_SIZE = 1000
-EPISODE_STEPS = 200
+EPISODE_STEPS = 20000
 
 def run_showcase(model_path="ppo_patrol_model.zip"):
-    # 1. Create environment
+    # Create environment
     env = PatrolEnv(
         num_robots=4,
         num_targets=15,
@@ -22,27 +22,22 @@ def run_showcase(model_path="ppo_patrol_model.zip"):
     )
     vec_env = DummyVecEnv([lambda: env])
 
-    # 2. Load model
+    # Load model
     model = PPO.load(model_path, vec_env)
     print("PPO model loaded successfully for showcase!")
 
-    # 3. Reset the vectorized env
+    # Reset
     obs = vec_env.reset()
+    real_env = vec_env.envs[0]  # The actual environment
 
-    # 4. Access the actual environment after reset
-    real_env = vec_env.envs[0]
-
-    # Visualization setup
+    # Visualization
     fig, ax = plt.subplots()
     ax.set_xlim(0, GRID_SIZE)
     ax.set_ylim(0, GRID_SIZE)
-    ax.set_title("Patrol & Protect Showcase (PPO)")
+    ax.set_title("Patrol & Protect Showcase (PPO Multi-Discrete)")
 
-    # Now that reset is called, real_env.central_obj should exist
-    central_dot, = ax.plot([real_env.central_obj.x],
-                           [real_env.central_obj.y],
+    central_dot, = ax.plot([real_env.central_obj.x], [real_env.central_obj.y],
                            'r*', markersize=10, label='Central Object')
-
     colors = ['bo', 'go', 'ro', 'mo']
     robot_dots = [ax.plot([], [], c)[0] for c in colors]
     target_dots = [ax.plot([], [], 'yo')[0] for _ in range(real_env.num_targets)]
@@ -55,7 +50,6 @@ def run_showcase(model_path="ppo_patrol_model.zip"):
 
     def update(frame):
         nonlocal obs
-        # Use the model to get the next action
         action, _states = model.predict(obs, deterministic=True)
         next_obs, rewards, done, info = vec_env.step(action)
 
@@ -65,10 +59,9 @@ def run_showcase(model_path="ppo_patrol_model.zip"):
         robots = updated_env.robots
         targets = updated_env.targets
 
-        # Update the visualization
         central_dot.set_data([central_obj.x], [central_obj.y])
-        for i, robot in enumerate(robots):
-            robot_dots[i].set_data([robot.x], [robot.y])
+        for i, bot in enumerate(robots):
+            robot_dots[i].set_data([bot.x], [bot.y])
         for i, t in enumerate(targets):
             target_dots[i].set_data([t.x], [t.y])
 

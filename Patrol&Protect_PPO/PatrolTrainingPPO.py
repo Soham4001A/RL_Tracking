@@ -1,18 +1,21 @@
 """
 PatrolTrainingPPO.py
 
-Refactored to use PPO (Proximal Policy Optimization) via Stable-Baselines3.
-Updated to compute a collective reward for multiple robots, 
-each referencing its own patrol position around the central object.
+A single-policy, multi-discrete approach:
+- We have one PPO agent controlling all robots.
+- The action space is MultiDiscrete([5]*num_robots),
+  i.e., each robot gets an action from {0,1,2,3,4}.
+- We sum partial rewards from each robot to form the total reward.
 """
 
 import gym
 import numpy as np
-import torch
 from math import sqrt, pi, cos, sin
 import matplotlib.pyplot as plt
+
 from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import DummyVecEnv
+from gym.spaces import MultiDiscrete, Box
 
 from shared_utils import (
     CentralObject, AdversarialTarget, Actor,
@@ -20,15 +23,21 @@ from shared_utils import (
     GRID_SIZE, TIME_STEP
 )
 
-# -------------------
-# ENVIRONMENT DEFINITION
-# -------------------
-
 class PatrolEnv(gym.Env):
     """
-    A custom Gym environment for multi-robot patrol around a central object
-    with adversarial targets. Uses PPO for training.
+    Single-policy environment with a multi-discrete action space:
+    - Each of num_robots picks a discrete action from [0..4].
+    - The environment sums partial rewards from each robot
+      (distance to patrol positions, collisions).
+    - Observations are from one "global" perspective, or you can
+      just pick robot[0]'s perspective plus relative info—up to you.
+
+    Since we want each robot to do something different but keep a single policy,
+    we define:
+      action_space = MultiDiscrete([5]*num_robots)
+    So at each step we get an action array, e.g. [0,3,4,1].
     """
+
     def __init__(
         self,
         num_robots=4,
@@ -38,101 +47,37 @@ class PatrolEnv(gym.Env):
         max_steps=200
     ):
         super(PatrolEnv, self).__init__()
-
         self.num_robots = num_robots
         self.num_targets = num_targets
         self.max_speed = max_speed
         self.patrol_radius = patrol_radius
         self.max_steps = max_steps
 
-        # RL-specific parameters
-        # (robot.x, robot.y, robot.vx, robot.vy) = 4 per robot,
-        # But we are controlling only a single action (for demonstration).
-        # The observation is from the perspective of "robot[0]" + 
-        # relative positions to others + central object + targets.
-        self.state_dim = 4 + 2 + ((self.num_robots - 1) * 2) + (self.num_targets * 2)
-        self.action_size = 5  # [up, down, left, right, stay]
+        # Define multi-discrete action space: each robot picks from 5 discrete actions
+        # [up=0, down=1, left=2, right=3, stay=4]
+        self.action_space = MultiDiscrete([5]*self.num_robots)
 
-        # Define gym spaces
-        self.observation_space = gym.spaces.Box(
-            low=-np.inf, high=np.inf, shape=(self.state_dim,), dtype=np.float32
+        # Observation space:
+        # We'll store each robot's (x,y,vx,vy) => 4 * num_robots,
+        # plus central_obj.x, central_obj.y => 2,
+        # plus each target.x, target.y => 2 * num_targets.
+        # total state_dim = (4*num_robots) + 2 + (2*num_targets).
+        self.state_dim = (4*self.num_robots) + 2 + (2*self.num_targets)
+        self.observation_space = Box(
+            low=-np.inf, high=np.inf,
+            shape=(self.state_dim,),
+            dtype=np.float32
         )
-        # Discrete actions: 0=up,1=down,2=left,3=right,4=stay
-        self.action_space = gym.spaces.Discrete(self.action_size)
 
-        # Environment entities
+        # Entities
         self.central_waypoints = [(200, 200), (800, 200), (800, 800), (200, 800)]
         self.central_obj = None
         self.robots = []
         self.targets = []
-
         self.current_step = 0
-
-    def _create_targets(self):
-        """
-        Create adversarial targets with predefined or random waypoints
-        (matching your prior logic).
-        """
-        waypoints_targets = [
-            # 1. Circular path
-            [(500 + 100 * cos(i * 2 * pi / 8), 500 + 100 * sin(i * 2 * pi / 8)) for i in range(8)],
-            # 2. Square path
-            [(200, 200), (200, 400), (400, 400), (400, 200)],
-            # 3. Zig-zag path
-            [(150, 100), (200, 300), (150, 500), (200, 700), (150, 900)],
-            # 4. Random walk path
-            [(np.random.randint(100, 900), np.random.randint(100, 900)) for _ in range(5)],
-            # 5. Diagonal line
-            [(i, i) for i in range(100, 900, 200)],
-            # 6. Figure 8
-            [
-                (
-                    500 + 100 * cos(i * pi / 4),
-                    500 + 50 * sin(i * pi / 4) * (1 if i % 2 == 0 else -1)
-                ) for i in range(8)
-            ],
-            # 7. Small circle
-            [(300 + 50 * cos(i * 2 * pi / 8), 300 + 50 * sin(i * 2 * pi / 8)) for i in range(8)],
-            # 8. Larger square
-            [(600, 600), (600, 900), (900, 900), (900, 600)],
-            # 9. Vertical zig-zag
-            [(700, 100), (700, 300), (700, 500), (700, 700), (700, 900)],
-            # 10. Converging inward
-            [(i, 1000 - i) for i in range(100, 900, 200)],
-            # 11. Horizontal zig-zag
-            [(100, 500), (300, 500), (500, 500), (700, 500), (900, 500)],
-            # 12. Elliptical path
-            [
-                (
-                    500 + 150 * cos(i * 2 * pi / 8),
-                    500 + 100 * sin(i * 2 * pi / 8)
-                ) for i in range(8)
-            ],
-            # 13. Figure 8 smaller
-            [
-                (
-                    400 + 50 * cos(i * pi / 4),
-                    400 + 30 * sin(i * pi / 4) * (1 if i % 2 == 0 else -1)
-                ) for i in range(8)
-            ],
-            # 14. Static
-            [(800, 800)],
-            # 15. Small random walk
-            [(np.random.randint(450, 550), np.random.randint(450, 550)) for _ in range(5)],
-        ]
-
-        targets = []
-        for i in range(self.num_targets):
-            t = AdversarialTarget(waypoints=waypoints_targets[i], max_speed=self.max_speed)
-            targets.append(t)
-        return targets
 
     def reset(self):
-        """
-        Reset the environment to start a new episode.
-        """
         self.current_step = 0
-
         # Reset central object
         self.central_obj = CentralObject(
             x=self.central_waypoints[0][0],
@@ -141,141 +86,166 @@ class PatrolEnv(gym.Env):
             waypoints=self.central_waypoints
         )
 
-        # Initialize robots around patrol positions
+        # Position each robot around the central object
         patrol_positions = get_patrol_positions(self.central_obj, self.patrol_radius)
-        # Note: get_patrol_positions typically returns 4 positions if you have 4 robots
-        self.robots = [Actor(px, py, self.max_speed) for (px, py) in patrol_positions]
+        # If num_robots>4, cycle or replicate
+        self.robots = []
+        for i in range(self.num_robots):
+            px, py = patrol_positions[i % len(patrol_positions)]
+            r = Actor(px, py, self.max_speed)
+            self.robots.append(r)
 
         # Create targets
         self.targets = self._create_targets()
 
-        # Return initial observation
         return self._get_observation()
 
-    def _get_observation(self):
-        """
-        Construct the observation from the perspective of robot[0].
-        """
-        robot = self.robots[0]
-        other_robot_deltas = []
-        for r in self.robots:
-            if r != robot:
-                other_robot_deltas.append(r.x - robot.x)
-                other_robot_deltas.append(r.y - robot.y)
-
-        target_deltas = []
-        for t in self.targets:
-            target_deltas.append(t.x - robot.x)
-            target_deltas.append(t.y - robot.y)
-
-        raw_state = [
-            robot.x, robot.y, robot.vx, robot.vy,
-            self.central_obj.x, self.central_obj.y
-        ] + other_robot_deltas + target_deltas
-
-        obs = normalize_state(raw_state, self.state_dim, grid_size=GRID_SIZE, max_speed=self.max_speed)
-        return np.array(obs, dtype=np.float32)
+    def _create_targets(self):
+        waypoints_targets = [
+            [(500 + 100*cos(i*2*pi/8), 500 + 100*sin(i*2*pi/8)) for i in range(8)],
+            [(200, 200), (200, 400), (400, 400), (400, 200)],
+            [(150, 100), (200, 300), (150, 500), (200, 700), (150, 900)],
+            [(np.random.randint(100,900), np.random.randint(100,900)) for _ in range(5)],
+            [(i, i) for i in range(100,900,200)],
+            [
+                (
+                    500 + 100*cos(i*pi/4),
+                    500 + 50*sin(i*pi/4)*(1 if i%2==0 else -1)
+                ) for i in range(8)
+            ],
+            [(300 + 50*cos(i*2*pi/8), 300 + 50*sin(i*2*pi/8)) for i in range(8)],
+            [(600,600), (600,900), (900,900), (900,600)],
+            [(700,100), (700,300), (700,500), (700,700), (700,900)],
+            [(i, 1000 - i) for i in range(100,900,200)],
+            [(100,500), (300,500), (500,500), (700,500), (900,500)],
+            [
+                (
+                    500 + 150*cos(i*2*pi/8),
+                    500 + 100*sin(i*2*pi/8)
+                ) for i in range(8)
+            ],
+            [
+                (
+                    400 + 50*cos(i*pi/4),
+                    400 + 30*sin(i*pi/4)*(1 if i%2==0 else -1)
+                ) for i in range(8)
+            ],
+            [(800,800)],
+            [(np.random.randint(450,550), np.random.randint(450,550)) for _ in range(5)]
+        ]
+        targets = []
+        for i in range(self.num_targets):
+            t = AdversarialTarget(waypoints=waypoints_targets[i], max_speed=self.max_speed)
+            targets.append(t)
+        return targets
 
     def step(self, action):
         """
-        Execute one time step within the environment:
-        1. Move the central object
-        2. Move each target
-        3. Apply *the same* action to all robots (for demonstration)
-        4. Compute reward
-        5. Check if done
+        action is an array/list of length num_robots (MultiDiscrete),
+        e.g. action[i] in [0..4]. We'll set each robot's velocity accordingly.
         """
         self.current_step += 1
 
-        # Update environment entities
+        # Move central object, targets
         self.central_obj.update()
         for t in self.targets:
             t.update()
 
-        # If you'd like each robot to have a different action,
-        # you'd need a multi-discrete or multi-agent approach
-        ax, ay = self._action_to_velocity(action)
+        # For each robot, pick velocity based on action[i]
+        for i, a in enumerate(action):
+            vx, vy = self._action_to_velocity(a)
+            self.robots[i].set_velocity(vx, vy)
 
-        # Control each robot with the same chosen action:
-        for i, robot in enumerate(self.robots):
-            robot.set_velocity(ax, ay)
-            robot.update_position()
+        # Update robot positions
+        for r in self.robots:
+            r.update_position()
 
-        # Compute reward, check done
-        reward = self._compute_reward()  
-        done = (self.current_step >= self.max_steps)
+        # Compute reward & check done
+        reward = self._compute_reward()
         obs = self._get_observation()
+        done = (self.current_step >= self.max_steps)
         info = {}
-
         return obs, reward, done, info
 
-    def _action_to_velocity(self, action):
+    def _action_to_velocity(self, a):
         """
-        Convert discrete action (0..4) to velocity.
-        0=up, 1=down, 2=left, 3=right, 4=stay
+        Convert a single discrete action to (vx, vy) for a robot.
+        0=up,1=down,2=left,3=right,4=stay
         """
-        if action == 0:
+        if a == 0:
             return (0, self.max_speed)
-        elif action == 1:
+        elif a == 1:
             return (0, -self.max_speed)
-        elif action == 2:
+        elif a == 2:
             return (-self.max_speed, 0)
-        elif action == 3:
+        elif a == 3:
             return (self.max_speed, 0)
         else:
             return (0, 0)
 
     def _compute_reward(self):
         """
-        Compute a combined reward for *all* robots.
-
-        Each robot has its own "patrol position" from get_patrol_positions().
-        We sum up partial rewards for each robot's distance to its patrol position.
-        We also penalize collisions among all robots.
+        Sum partial rewards for each robot: distance to assigned patrol position,
+        plus collision penalties.
         """
         patrol_positions = get_patrol_positions(self.central_obj, self.patrol_radius)
-        
+
         total_reward = 0.0
-        # For each robot, compute distance to its assigned patrol position
+        # For each robot, get assigned patrol position
         for i, robot in enumerate(self.robots):
-            desired_x, desired_y = patrol_positions[i]
-            rx, ry = robot.x, robot.y
-            dist = sqrt((rx - desired_x)**2 + (ry - desired_y)**2)
-            # Negative reward based on distance
-            partial_reward = -dist / 100.0
+            desired_x, desired_y = patrol_positions[i % len(patrol_positions)]
+            dist = sqrt((robot.x - desired_x)**2 + (robot.y - desired_y)**2)
+            # e.g. negative distance penalty
+            partial = -dist / 100.0
 
-            # Collision penalty with other robots
-            for j, other_robot in enumerate(self.robots):
+            # Collision penalty
+            for j, other_r in enumerate(self.robots):
                 if j != i:
-                    other_dist = sqrt((other_robot.x - rx)**2 + (other_robot.y - ry)**2)
-                    if other_dist < 0.5:
-                        partial_reward -= 1.0
+                    d_coll = sqrt((robot.x - other_r.x)**2 + (robot.y - other_r.y)**2)
+                    if d_coll < 0.5:
+                        partial -= 1.0
 
-            total_reward += partial_reward
+            total_reward += partial
 
-        # Clip total reward
-        total_reward = float(np.clip(total_reward, -10, 10))
-        return total_reward
+        # Clip reward
+        return float(np.clip(total_reward, -10, 10))
 
+    def _get_observation(self):
+        """
+        Single observation vector with:
+         - robots => (x, y, vx, vy) * num_robots
+         - central_obj => (x, y)
+         - targets => (x, y) * num_targets
+        """
+        state = []
+        for r in self.robots:
+            state += [r.x, r.y, r.vx, r.vy]
 
-# -------------------
-# MAIN TRAINING LOGIC
-# -------------------
+        state += [self.central_obj.x, self.central_obj.y]
+
+        for t in self.targets:
+            state += [t.x, t.y]
+
+        obs = normalize_state(
+            state,
+            self.state_dim,
+            grid_size=GRID_SIZE,
+            max_speed=self.max_speed
+        )
+        return np.array(obs, dtype=np.float32)
 
 def main():
-    # Create environment
+    from stable_baselines3 import PPO
+
     env = PatrolEnv(
         num_robots=4,
         num_targets=15,
         max_speed=10,
-        patrol_radius=4.0,   # Adjust as you like
-        max_steps=200
+        patrol_radius=4.0,
+        max_steps=20000
     )
-
-    # Wrap in a VecEnv for Stable-Baselines3
     vec_env = DummyVecEnv([lambda: env])
 
-    # Create PPO model
     model = PPO(
         policy="MlpPolicy",
         env=vec_env,
@@ -285,17 +255,13 @@ def main():
         batch_size=128,
         gamma=0.9,
         clip_range=0.2,
-        tensorboard_log="./ppo_patrol_tensorboard/"
+        tensorboard_log="./Patrol&Protect_PPO/ppo_patrol_tensorboard/"
     )
 
-    # Train the model
     total_timesteps = 200_000
     model.learn(total_timesteps=total_timesteps)
-
-    # Save the model
     model.save("ppo_patrol_model")
     print("PPO model saved successfully!")
-
 
 if __name__ == "__main__":
     main()
