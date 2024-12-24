@@ -10,25 +10,25 @@ import matplotlib.pyplot as plt
 GRID_SIZE = 100
 TIME_STEP = 0.1
 MAX_SPEED = 10
-USE_TRANSFORMER = True  # Set to False to use SimpleNN
+USE_TRANSFORMER = False  # Set to False to use SimpleNN
 EPISODES = 10000
 
 # Patrol Formation Parameters
-PATROL_RADIUS = 4
+PATROL_RADIUS = sqrt((2)**2+(2)**2)
 
 # Target Parameters
 NUM_ROBOTS = 4
 NUM_TARGETS = 2
-DETECTION_RADIUS = 10
-KILL_RADIUS = 2
+DETECTION_RADIUS = 10 #This needs to be based off the central obj
+KILL_RADIUS = sqrt((5)**2+(5)**2) # This needs to be based off the central obj
 
 # RL Parameters
 # State: (robot_x, robot_y, vx, vy) + 2 targets (dx, dy each) + 3 other robots (dx, dy each)
 STATE_DIM = 4 + (NUM_TARGETS * 2) + ((NUM_ROBOTS - 1) * 2) + 2 
 ACTION_SIZE = 5
 GAMMA = 0.9
-LR = 0.05
-BATCH_SIZE = 256
+LR = 0.0005
+BATCH_SIZE = 128
 
 # Action Maps
 ACTION_MAP = {
@@ -223,11 +223,10 @@ def compute_reward(curr_patrol_dist, prev_patrol_dist, robots, other_robot_dista
     Compute the reward for a robot based only on its patrol behavior and avoiding collisions.
     """
     # Base reward: closer to patrol position is better
-    #reward = 0
+    #eward = 0
     reward = -curr_patrol_dist / GRID_SIZE
-
     if prev_patrol_dist is not None and curr_patrol_dist < prev_patrol_dist:
-        reward += 1.5  # Reward for improving patrol position
+        reward += 0.5  # Reward for improving patrol position
 
     # Collision penalty: Penalize for being too close to other robots
     for dist in other_robot_distances:
@@ -267,9 +266,6 @@ def run_simulation(agent, robots, targets, central_obj, num_steps=200, epsilon=0
         PATROL_POSITIONS = get_patrol_positions(central_obj)
 
         for i, robot in enumerate(robots):
-            # Compute patrol distance
-            desired_x, desired_y = PATROL_POSITIONS[i]
-            curr_patrol_dist = sqrt((robot.x - desired_x)**2 + (robot.y - desired_y)**2)
 
             # Compute distances to other robots
             other_robot_distances = [
@@ -296,6 +292,10 @@ def run_simulation(agent, robots, targets, central_obj, num_steps=200, epsilon=0
             ax, ay = ACTION_MAP[action]
             robot.set_velocity(ax, ay)
             robot.update_position()
+            
+            # Compute patrol distance
+            desired_x, desired_y = PATROL_POSITIONS[i]
+            curr_patrol_dist = sqrt((robot.x - desired_x)**2 + (robot.y - desired_y)**2)
 
             # Compute reward based on patrol behavior only
             reward = compute_reward(curr_patrol_dist, prev_patrol_distances[i], robots, other_robot_distances)

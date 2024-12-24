@@ -10,7 +10,6 @@ import matplotlib.pyplot as plt
 GRID_SIZE = 100
 TIME_STEP = 0.1
 MAX_SPEED = 10
-VISUALIZATION = False
 
 # RL Parameters
 NUM_ROBOTS = 4

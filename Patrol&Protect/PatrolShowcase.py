@@ -11,30 +11,26 @@ TIME_STEP = 0.1
 NUM_ROBOTS = 4
 NUM_TARGETS = 2
 MAX_SPEED = 20
-DETECTION_RADIUS = 15
-KILL_RADIUS = 2
+DETECTION_RADIUS = 15 # Fix This
+KILL_RADIUS = 2 #Fix This
 
 USE_TRANSFORMER = False  # Set to False to use SimpleNN
 
 # Patrol formation parameters
 PATROL_RADIUS = 10
 CENTRAL_X, CENTRAL_Y = 50, 50
-PATROL_POSITIONS = [
-    (CENTRAL_X + PATROL_RADIUS, CENTRAL_Y),
-    (CENTRAL_X - PATROL_RADIUS, CENTRAL_Y),
-    (CENTRAL_X, CENTRAL_Y + PATROL_RADIUS),
-    (CENTRAL_X, CENTRAL_Y - PATROL_RADIUS)
-]
 
 # State and Action Spaces (Adjust as per your model)
 STATE_SIZE = 4 + (NUM_TARGETS * 2) + ((NUM_ROBOTS - 1)*2) + 2  # Include central_obj's position
 ACTION_SIZE = 5  # [up, down, left, right, stay]
-ACTIONS = {
-    0: (0, MAX_SPEED),    # up
-    1: (0, -MAX_SPEED),   # down
-    2: (-MAX_SPEED, 0),   # left
-    3: (MAX_SPEED, 0),    # right
-    4: (0, 0)             # stay
+
+# Action Maps
+ACTION_MAP = {
+    0: (0, MAX_SPEED),    # Up
+    1: (0, -MAX_SPEED),   # Down
+    2: (-MAX_SPEED, 0),   # Left
+    3: (MAX_SPEED, 0),    # Right
+    4: (0,0)              # Stay 
 }
 
 class Actor:
@@ -249,35 +245,44 @@ def run_simulation(model):
         PATROL_POSITIONS = get_patrol_positions(central_obj)
 
         for i, robot in enumerate(robots):
-            # Compute state
-            dx_targets = []
-            for tar in targets:
-                dx_targets.append(tar.x - robot.x)
-                dx_targets.append(tar.y - robot.y)
+            # Compute patrol distance
+            desired_x, desired_y = PATROL_POSITIONS[i]
+            #curr_patrol_dist = sqrt((robot.x - desired_x)**2 + (robot.y - desired_y)**2)
 
-            dx_robots = []
-            for j, other_robot in enumerate(robots):
-                if j != i:
-                    dx_robots.append(other_robot.x - robot.x)
-                    dx_robots.append(other_robot.y - robot.y)
+            # Compute distances to other robots
+            other_robot_distances = [
+                sqrt((other_robot.x - robot.x)**2 + (other_robot.y - robot.y)**2)
+                for j, other_robot in enumerate(robots) if j != i
+            ]
 
-            state = [robot.x, robot.y, robot.vx, robot.vy] + dx_targets + dx_robots
-            state = normalize_state(state)
+            # Create state
+            state = normalize_state([
+                robot.x, robot.y, robot.vx, robot.vy,
+                central_obj.x, central_obj.y
+            ] + [
+                other_robot.x - robot.x for other_robot in robots if other_robot != robot
+            ] + [
+                other_robot.y - robot.y for other_robot in robots if other_robot != robot
+            ] + [
+                target.x - robot.x for target in targets
+            ] + [
+                target.y - robot.y for target in targets
+            ])
 
-            # Choose action from model
-            action = choose_action(state, model)
-            vx, vy = ACTIONS[action]
-            robot.set_velocity(vx, vy)
+            # Choose action and update robot's position
+            action = choose_action(state,model)
+            ax, ay = ACTION_MAP[action]
+            robot.set_velocity(ax, ay)
             robot.update_position()
 
-        # Update visualization
-        for i, robot in enumerate(robots):
+            # **Add Visualization Update Here**
             robot_dots[i].set_data([robot.x], [robot.y])
 
+        # Update visualization for targets
         for i, tar in enumerate(targets):
             target_dots[i].set_data([tar.x], [tar.y])
 
-        # Update central object position if it's moving
+        # Update central object position if it's moving (if applicable)
         central_dot.set_data([central_obj.x], [central_obj.y])
 
         return robot_dots + target_dots + [central_dot]
