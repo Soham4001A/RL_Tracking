@@ -51,13 +51,13 @@ def run_showcase(model_path="ppo_patrol_model.zip"):
     def update(frame):
         nonlocal obs
         action, _states = model.predict(obs, deterministic=True)
-        print("After model.predict, shape of action:", action.shape)
-        print("Action contents right after predict:", action)
+        #print("After model.predict, shape of action:", action.shape)
+        #print("Action contents right after predict:", action)
 
         #action = np.array(action).flatten()
         #action_dict = {i: int(a) for i, a in enumerate(action)}
 
-        print("Action array going into env step:", action)
+        #print("Action array going into env step:", action)
 
         # Validate action_dict
         #if not isinstance(action_dict, dict):

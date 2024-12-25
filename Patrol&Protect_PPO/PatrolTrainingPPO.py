@@ -145,7 +145,7 @@ class PatrolEnv(gym.Env):
 
     def step(self, action: Dict[int, int]) -> Tuple[np.ndarray, float, bool, bool, dict]:
             
-        print("Actions received inside step():", action)
+        #print("Actions received inside step():", action)
 
         self.current_step += 1
 
@@ -181,7 +181,7 @@ class PatrolEnv(gym.Env):
             velocity = (self.max_speed, 0)  # Right
         else:
             velocity = (0, 0)  # Stay
-        print(f"Action={a}, Velocity={velocity}")
+        #print(f"Action={a}, Velocity={velocity}")
         return velocity
 
     def _compute_reward(self):
