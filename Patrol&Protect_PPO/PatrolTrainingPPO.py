@@ -8,19 +8,23 @@ A single-policy, multi-discrete approach:
 - We sum partial rewards from each robot to form the total reward.
 """
 
+DEBUGGING = True
+
 import gym
 import numpy as np
+from typing import Dict, Tuple
 from math import sqrt, pi, cos, sin
 import matplotlib.pyplot as plt
 
 from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import DummyVecEnv
+from stable_baselines3.common.policies import ActorCriticPolicy
 from gym.spaces import MultiDiscrete, Box
 
 from shared_utils import (
     CentralObject, AdversarialTarget, Actor,
     normalize_state, get_patrol_positions,
-    GRID_SIZE, TIME_STEP
+    GRID_SIZE, TIME_STEP, TransformerFeatureExtractor
 )
 
 class PatrolEnv(gym.Env):
@@ -44,7 +48,7 @@ class PatrolEnv(gym.Env):
         num_targets=15,
         max_speed=10,
         patrol_radius=4.0,
-        max_steps=200
+        max_steps=20000
     ):
         super(PatrolEnv, self).__init__()
         self.num_robots = num_robots
@@ -139,11 +143,10 @@ class PatrolEnv(gym.Env):
             targets.append(t)
         return targets
 
-    def step(self, action):
-        """
-        action is an array/list of length num_robots (MultiDiscrete),
-        e.g. action[i] in [0..4]. We'll set each robot's velocity accordingly.
-        """
+    def step(self, action: Dict[int, int]) -> Tuple[np.ndarray, float, bool, bool, dict]:
+            
+        print("Actions received inside step():", action)
+
         self.current_step += 1
 
         # Move central object, targets
@@ -168,20 +171,18 @@ class PatrolEnv(gym.Env):
         return obs, reward, done, info
 
     def _action_to_velocity(self, a):
-        """
-        Convert a single discrete action to (vx, vy) for a robot.
-        0=up,1=down,2=left,3=right,4=stay
-        """
         if a == 0:
-            return (0, self.max_speed)
+            velocity = (0, self.max_speed)  # Up
         elif a == 1:
-            return (0, -self.max_speed)
+            velocity = (0, -self.max_speed)  # Down
         elif a == 2:
-            return (-self.max_speed, 0)
+            velocity = (-self.max_speed, 0)  # Left
         elif a == 3:
-            return (self.max_speed, 0)
+            velocity = (self.max_speed, 0)  # Right
         else:
-            return (0, 0)
+            velocity = (0, 0)  # Stay
+        print(f"Action={a}, Velocity={velocity}")
+        return velocity
 
     def _compute_reward(self):
         """
@@ -196,8 +197,16 @@ class PatrolEnv(gym.Env):
             desired_x, desired_y = patrol_positions[i % len(patrol_positions)]
             dist = sqrt((robot.x - desired_x)**2 + (robot.y - desired_y)**2)
             # e.g. negative distance penalty
-            partial = -dist / 100.0
+            #partial = -dist / 100.0
+            partial = - dist /10
+            #if DEBUGGING:
+            #    print(f"Distance Diff: {dist}")
 
+            patrol_proxmity_dist = 3*sqrt(2)
+
+            if dist < patrol_proxmity_dist:
+                partial += 100
+                
             # Collision penalty
             for j, other_r in enumerate(self.robots):
                 if j != i:
@@ -207,8 +216,11 @@ class PatrolEnv(gym.Env):
 
             total_reward += partial
 
+        if DEBUGGING:
+            print(f"Total Reward: {total_reward}")
+
         # Clip reward
-        return float(np.clip(total_reward, -10, 10))
+        return float(np.clip(total_reward, -1000, 1000))
 
     def _get_observation(self):
         """
@@ -242,25 +254,34 @@ def main():
         num_targets=15,
         max_speed=10,
         patrol_radius=4.0,
-        max_steps=20000
+        max_steps=200000
     )
     vec_env = DummyVecEnv([lambda: env])
 
+    policy_kwargs = dict(
+        features_extractor_class=TransformerFeatureExtractor,
+        features_extractor_kwargs=dict(embed_dim=64, num_heads=3, ff_hidden=128, num_layers=2),
+        net_arch=[64, 64],  # Optional feedforward layers after transformer
+    )
+
     model = PPO(
-        policy="MlpPolicy",
+        #policy="MlpPolicy",
+        policy = ActorCriticPolicy,
+        #policy_kwargs={"net_arch": [256, 256, 256, 256, 128]},  # Example architecture
         env=vec_env,
         verbose=1,
         learning_rate=0.0005,
-        n_steps=2048,
-        batch_size=128,
+        n_steps=10000,
+        batch_size=250,
         gamma=0.9,
         clip_range=0.2,
+        ent_coef=0.01,
         tensorboard_log="./Patrol&Protect_PPO/ppo_patrol_tensorboard/"
     )
 
-    total_timesteps = 200_000
+    total_timesteps = 1_000_000
     model.learn(total_timesteps=total_timesteps)
-    model.save("ppo_patrol_model")
+    model.save("./Patrol&Protect_PPO/ppo_patrol_model")
     print("PPO model saved successfully!")
 
 if __name__ == "__main__":

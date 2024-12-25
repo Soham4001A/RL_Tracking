@@ -51,6 +51,18 @@ def run_showcase(model_path="ppo_patrol_model.zip"):
     def update(frame):
         nonlocal obs
         action, _states = model.predict(obs, deterministic=True)
+        print("After model.predict, shape of action:", action.shape)
+        print("Action contents right after predict:", action)
+
+        #action = np.array(action).flatten()
+        #action_dict = {i: int(a) for i, a in enumerate(action)}
+
+        print("Action array going into env step:", action)
+
+        # Validate action_dict
+        #if not isinstance(action_dict, dict):
+        #    raise ValueError(f"action_dict must be a dictionary, got {type(action_dict)} instead.")
+
         next_obs, rewards, done, info = vec_env.step(action)
 
         # Update references
@@ -59,6 +71,7 @@ def run_showcase(model_path="ppo_patrol_model.zip"):
         robots = updated_env.robots
         targets = updated_env.targets
 
+        # Update visualization
         central_dot.set_data([central_obj.x], [central_obj.y])
         for i, bot in enumerate(robots):
             robot_dots[i].set_data([bot.x], [bot.y])
