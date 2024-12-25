@@ -260,22 +260,23 @@ def main():
 
     policy_kwargs = dict(
         features_extractor_class=TransformerFeatureExtractor,
-        features_extractor_kwargs=dict(embed_dim=64, num_heads=3, ff_hidden=128, num_layers=2),
-        net_arch=[64, 64],  # Optional feedforward layers after transformer
+        features_extractor_kwargs=dict(embed_dim=72, num_heads=3, ff_hidden=128, num_layers=4, seq_len=6),
+        net_arch=[432, 64],  # Optional feedforward layers after transformer
     )
 
     model = PPO(
         #policy="MlpPolicy",
         policy = ActorCriticPolicy,
         #policy_kwargs={"net_arch": [256, 256, 256, 256, 128]},  # Example architecture
+        policy_kwargs = policy_kwargs,
         env=vec_env,
         verbose=1,
-        learning_rate=0.0005,
+        learning_rate=0.00085,
         n_steps=10000,
-        batch_size=250,
+        batch_size=500,
         gamma=0.9,
-        clip_range=0.2,
-        ent_coef=0.01,
+        clip_range=0.3,
+        ent_coef=0.1,
         tensorboard_log="./Patrol&Protect_PPO/ppo_patrol_tensorboard/"
     )
 

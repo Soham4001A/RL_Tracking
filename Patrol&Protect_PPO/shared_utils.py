@@ -194,18 +194,22 @@ def get_patrol_positions(central_obj, patrol_radius=PATROL_RADIUS):
 
 
 
-
 class TransformerFeatureExtractor(BaseFeaturesExtractor):
-    """
-    Custom Transformer Feature Extractor with 3 heads.
-    """
-    def __init__(self, observation_space, embed_dim=64, num_heads=3, ff_hidden=128, num_layers=2):
-        super(TransformerFeatureExtractor, self).__init__(observation_space, features_dim=embed_dim)
+    def __init__(self, observation_space, embed_dim=64, num_heads=3, ff_hidden=128, num_layers=4, seq_len=6):
+        feature_dim = embed_dim * seq_len
+        super(TransformerFeatureExtractor, self).__init__(
+            observation_space, features_dim=feature_dim
+        )
         self.embed_dim = embed_dim
         self.input_dim = observation_space.shape[0]
+        self.seq_len = seq_len  # Define seq_len explicitly
+        
+        # Validate that seq_len and embed_dim are compatible
+        if self.input_dim % seq_len != 0:
+            raise ValueError("Input dimension must be divisible by seq_len.")
         
         # Linear projection for input embedding
-        self.input_embedding = nn.Linear(self.input_dim, embed_dim)
+        self.input_embedding = nn.Linear(self.input_dim // seq_len, embed_dim)
         
         # Transformer encoder layers
         self.encoder_layer = nn.TransformerEncoderLayer(
@@ -220,6 +224,11 @@ class TransformerFeatureExtractor(BaseFeaturesExtractor):
         self.flatten = nn.Flatten()
     
     def forward(self, x):
+        # Reshape input into (batch_size, seq_len, features_per_seq)
+        batch_size = x.shape[0]
+        features_per_seq = self.input_dim // self.seq_len
+        x = x.view(batch_size, self.seq_len, features_per_seq)
+        
         # Project input to embedding space
         x = self.input_embedding(x)
         
