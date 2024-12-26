@@ -198,11 +198,12 @@ class PatrolEnv(gym.Env):
             dist = sqrt((robot.x - desired_x)**2 + (robot.y - desired_y)**2)
             # e.g. negative distance penalty
             #partial = -dist / 100.0
-            partial = - dist /10
+            #partial = - dist /10
+            partial = 0
             #if DEBUGGING:
             #    print(f"Distance Diff: {dist}")
 
-            patrol_proxmity_dist = 3*sqrt(2)
+            patrol_proxmity_dist = 5*sqrt(2)
 
             if dist < patrol_proxmity_dist:
                 partial += 100
@@ -254,7 +255,7 @@ def main():
         num_targets=15,
         max_speed=10,
         patrol_radius=4.0,
-        max_steps=200000
+        max_steps=2000
     )
     vec_env = DummyVecEnv([lambda: env])
 
@@ -269,14 +270,15 @@ def main():
         policy = ActorCriticPolicy,
         #policy_kwargs={"net_arch": [256, 256, 256, 256, 128]},  # Example architecture
         policy_kwargs = policy_kwargs,
-        env=vec_env,
+        #env=vec_env, ????
+        env = env,
         verbose=1,
         learning_rate=0.00085,
-        n_steps=10000,
-        batch_size=500,
-        gamma=0.9,
-        clip_range=0.3,
-        ent_coef=0.1,
+        n_steps=100,
+        batch_size=250,
+        gamma=0.75,
+        clip_range=0.2,
+        ent_coef=0.01,
         tensorboard_log="./Patrol&Protect_PPO/ppo_patrol_tensorboard/"
     )
 
