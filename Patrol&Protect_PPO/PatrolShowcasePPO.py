@@ -12,13 +12,14 @@ GRID_SIZE = 1000
 EPISODE_STEPS = 20000
 
 def run_showcase(model_path="ppo_patrol_model.zip"):
-    # Create environment
+    # Create environment (ensure history_length matches the training env)
     env = PatrolEnv(
         num_robots=4,
         num_targets=15,
         max_speed=10,
         patrol_radius=4.0,
-        max_steps=EPISODE_STEPS
+        max_steps=EPISODE_STEPS,
+        history_length=5  # Use the same history length as training
     )
     vec_env = DummyVecEnv([lambda: env])
 
@@ -30,7 +31,7 @@ def run_showcase(model_path="ppo_patrol_model.zip"):
     obs = vec_env.reset()
     real_env = vec_env.envs[0]  # The actual environment
 
-    # Visualization
+    # Visualization setup remains unchanged
     fig, ax = plt.subplots()
     ax.set_xlim(0, GRID_SIZE)
     ax.set_ylim(0, GRID_SIZE)
@@ -51,31 +52,14 @@ def run_showcase(model_path="ppo_patrol_model.zip"):
     def update(frame):
         nonlocal obs
         action, _states = model.predict(obs, deterministic=True)
-        #print("After model.predict, shape of action:", action.shape)
-        #print("Action contents right after predict:", action)
-
-        #action = np.array(action).flatten()
-        #action_dict = {i: int(a) for i, a in enumerate(action)}
-
-        #print("Action array going into env step:", action)
-
-        # Validate action_dict
-        #if not isinstance(action_dict, dict):
-        #    raise ValueError(f"action_dict must be a dictionary, got {type(action_dict)} instead.")
-
         next_obs, rewards, done, info = vec_env.step(action)
 
-        # Update references
-        updated_env = vec_env.envs[0]
-        central_obj = updated_env.central_obj
-        robots = updated_env.robots
-        targets = updated_env.targets
-
         # Update visualization
-        central_dot.set_data([central_obj.x], [central_obj.y])
-        for i, bot in enumerate(robots):
+        updated_env = vec_env.envs[0]
+        central_dot.set_data([updated_env.central_obj.x], [updated_env.central_obj.y])
+        for i, bot in enumerate(updated_env.robots):
             robot_dots[i].set_data([bot.x], [bot.y])
-        for i, t in enumerate(targets):
+        for i, t in enumerate(updated_env.targets):
             target_dots[i].set_data([t.x], [t.y])
 
         obs = next_obs
@@ -92,6 +76,7 @@ def run_showcase(model_path="ppo_patrol_model.zip"):
         interval=50,
         blit=True
     )
+    
     plt.show()
 
 if __name__ == "__main__":

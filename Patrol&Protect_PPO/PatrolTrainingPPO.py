@@ -41,7 +41,9 @@ class PatrolEnv(gym.Env):
         max_steps=2000,
         epsilon=1.0,
         epsilon_min=0.1,
-        epsilon_decay=0.995
+        epsilon_decay=0.995,
+        reward_smoothing_window=10,
+        history_length = 5
     ):
         super(PatrolEnv, self).__init__()
         self.num_robots = num_robots
@@ -52,21 +54,25 @@ class PatrolEnv(gym.Env):
         # Epsilon parameters for exploration
         # Discrete actions [0..4] per robot
         self.action_space = MultiDiscrete([5]*self.num_robots)
+        self.history_length = history_length
 
         # State = (x,y,vx,vy for each robot) + (x,y central_obj) + (x,y for each target)
         self.state_dim = (4*self.num_robots) + 2 + (2*self.num_targets)
         self.observation_space = Box(
             low=-np.inf, high=np.inf,
-            shape=(self.state_dim,),
+            shape=(self.state_dim * self.history_length,),
             dtype=np.float32
         )
 
         self.epsilon = epsilon
         self.epsilon_min = epsilon_min
         self.epsilon_decay = epsilon_decay
+        self.reward_smoothing_window = reward_smoothing_window
+        self.reward_buffer = []
+        self.state_history = []
 
         # Some large domain, e.g. 1000x1000, but we'll normalize to [0,1]
-        self.central_waypoints = [(200, 200), (800, 200), (800, 800), (200, 800)]
+        self.central_waypoints = [(800, 200), (800, 800), (200, 800), (800, 200)]
         self.central_obj = None
         self.robots = []
         self.targets = []
@@ -79,6 +85,7 @@ class PatrolEnv(gym.Env):
 
     def reset(self):
         self.current_step = 0
+        self.state_history = []
 
         self.central_obj = CentralObject(
             x=self.central_waypoints[0][0],
@@ -91,7 +98,8 @@ class PatrolEnv(gym.Env):
         self.robots = []
         for i in range(self.num_robots):
             px, py = patrol_positions[i % len(patrol_positions)]
-            r = Actor(px, py, self.max_speed)
+            #r = Actor(px, py, self.max_speed)
+            r = Actor(500, 500, max_speed = 15) #Testing starting away from Central Obj
             self.robots.append(r)
             self.prev_distances[i] = None  # Reset previous distance
 
@@ -209,12 +217,12 @@ class PatrolEnv(gym.Env):
             dist = sqrt((robot.x-desired_x)**2 + (robot.y-desired_y)**2)
 
             # base negative
-            partial = -dist/1000
+            partial = -dist/500
 
             # check improvement from last step
             if self.prev_distances[i] is not None:
                 if dist < self.prev_distances[i]:
-                    partial += 1.0  # small bonus if improved
+                    partial += 15.0  # small bonus if improved
             # store current distance
             self.prev_distances[i] = dist
 
@@ -222,7 +230,7 @@ class PatrolEnv(gym.Env):
             # in normalized scale, 5 in real scale = 5/GRID_SIZE in normalized
             # for GRID_SIZE=1000 => 5/1000=0.005
             # for smaller domain => adjust accordingly
-            success_thresh = 10
+            success_thresh = 1
             if dist < success_thresh:
                 partial += 100.0
 
@@ -232,42 +240,66 @@ class PatrolEnv(gym.Env):
                     dx = (robot.x - other_r.x)
                     dy = (robot.y - other_r.y)
                     if sqrt(dx*dx + dy*dy) < 1.0: # if < 1.0 => collision
-                        partial -= 2.0
+                        partial -= 0.5
 
             total_reward += partial
 
         if DEBUGGING:
             print(f"Total Reward: {total_reward}")
 
-        return float(np.clip(total_reward, -1000, 1000))
+        # Add the new reward to the buffer
+        self.reward_buffer.append(total_reward)
+        if len(self.reward_buffer) > self.reward_smoothing_window:
+            self.reward_buffer.pop(0)
+
+        # Calculate smoothed reward as the average
+        smoothed_reward = np.mean(self.reward_buffer)
+
+        return smoothed_reward
+
+    def _build_state(self):
+        """
+        Construct the current state of the environment.
+        The state should include:
+        - Positions and velocities of robots
+        - Position of the central object
+        - Positions of all targets
+        """
+        # Robot states: x, y, vx, vy for each robot
+        robot_states = []
+        for robot in self.robots:
+            robot_states.extend([robot.x, robot.y, robot.vx, robot.vy])
+
+        # Central object state: x, y
+        central_state = [self.central_obj.x, self.central_obj.y]
+
+        # Target states: x, y for each target
+        target_states = []
+        for target in self.targets:
+            target_states.extend([target.x, target.y])
+
+        # Combine all states into a single array
+        state = np.array(robot_states + central_state + target_states, dtype=np.float32)
+
+        return state
 
     def _get_observation(self):
-        """
-        Observations are normalized to [0,1].
-        """
-        # Build raw state
-        state = []
-        for r in self.robots:
-            # x,y => normalized
-            rx = r.x/float(GRID_SIZE)
-            ry = r.y/float(GRID_SIZE)
-            # vx,vy => maybe also scaled by GRID_SIZE or a speed factor
-            rvx = r.vx/float(self.max_speed)
-            rvy = r.vy/float(self.max_speed)
-            state += [rx, ry, rvx, rvy]
+        # Current state
+        current_state = self._build_state()
 
-        # central object
-        cx = self.central_obj.x/float(GRID_SIZE)
-        cy = self.central_obj.y/float(GRID_SIZE)
-        state += [cx, cy]
+        # Add to history buffer
+        self.state_history.append(current_state)
+        if len(self.state_history) > self.history_length:
+            self.state_history.pop(0)
 
-        # targets
-        for t in self.targets:
-            tx = t.x/float(GRID_SIZE)
-            ty = t.y/float(GRID_SIZE)
-            state += [tx, ty]
+        # Pad history if not enough steps yet
+        while len(self.state_history) < self.history_length:
+            self.state_history.insert(0, np.zeros_like(current_state))
 
-        return np.array(state, dtype=np.float32)
+        # Flatten history into a single observation
+        observation = np.concatenate(self.state_history, axis=0)
+
+        return observation
 
 def main():
     from stable_baselines3 import PPO
@@ -276,7 +308,7 @@ def main():
         num_robots=4,
         num_targets=15,
         max_speed=10,
-        patrol_radius=4.0,
+        patrol_radius=3.0,
         max_steps=2000,
         epsilon=1.0,
         epsilon_min=0.1,
@@ -286,8 +318,8 @@ def main():
 
     policy_kwargs = dict(
         features_extractor_class=TransformerFeatureExtractor,
-        features_extractor_kwargs=dict(embed_dim=72, num_heads=3, ff_hidden=128, num_layers=4, seq_len=6),
-        net_arch=[432, 64],  # Optional feedforward layers after transformer
+        features_extractor_kwargs=dict(embed_dim=72, num_heads=3, ff_hidden=128, num_layers=4, seq_len=12),
+        net_arch=[128, 256, 128, 64],  # Optional feedforward layers after transformer
     )
 
     model = PPO(
@@ -295,14 +327,15 @@ def main():
         policy_kwargs=policy_kwargs,
         env=vec_env,
         verbose=1,
-        use_sde = True,
-        sde_sample_freq = 3,
-        learning_rate=0.000085,
+        normalize_advantage = True, #??
+        use_sde = False, # Essentially reducing delta of actions when rewards are very positive
+        #sde_sample_freq = 3,
+        learning_rate=0.003,
         n_steps=1000,
         batch_size=250,
         gamma=0.9,
         clip_range=0.2,
-        ent_coef=0.01,
+        ent_coef=0.05,
         tensorboard_log="./Patrol&Protect_PPO/ppo_patrol_tensorboard/"
     )
 
