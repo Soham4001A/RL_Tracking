@@ -6,6 +6,7 @@ to help the PPO agent learn more effectively.
 """
 
 DEBUGGING = True
+SINGLE_ROBOT = False #Only computes reward for 1 robot
 
 import gym
 import numpy as np
@@ -35,8 +36,9 @@ class PatrolEnv(gym.Env):
     def __init__(
         self,
         num_robots=4,
-        num_targets=15,
-        max_speed=10,
+        num_targets=1, #Testing
+        #num_targets = 15, 
+        max_speed=20,
         patrol_radius=4.0,
         max_steps=2000,
         epsilon=1.0,
@@ -90,7 +92,7 @@ class PatrolEnv(gym.Env):
         self.central_obj = CentralObject(
             x=self.central_waypoints[0][0],
             y=self.central_waypoints[0][1],
-            max_speed=5,
+            max_speed=10,
             waypoints=self.central_waypoints
         )
 
@@ -99,7 +101,7 @@ class PatrolEnv(gym.Env):
         for i in range(self.num_robots):
             px, py = patrol_positions[i % len(patrol_positions)]
             #r = Actor(px, py, self.max_speed)
-            r = Actor(500, 500, max_speed = 15) #Testing starting away from Central Obj
+            r = Actor(500, 500, self.max_speed) #Testing starting away from Central Obj
             self.robots.append(r)
             self.prev_distances[i] = None  # Reset previous distance
 
@@ -140,6 +142,12 @@ class PatrolEnv(gym.Env):
             [(800,800)],
             [(np.random.randint(450,550), np.random.randint(450,550)) for _ in range(5)]
         ]
+
+        #Testing
+        waypoints_targets.clear()
+        for i in range (self.num_targets):
+            waypoints_targets.append([(200, 200), (200, 400), (400, 400), (400, 200)])
+
         targets = []
         for i in range(self.num_targets):
             t = AdversarialTarget(waypoints=waypoints_targets[i], max_speed=self.max_speed)
@@ -162,14 +170,11 @@ class PatrolEnv(gym.Env):
         for i, a in enumerate(action):
             vx, vy = self._action_to_velocity(a)
             self.robots[i].set_velocity(vx, vy)
-
-        # Update robot positions
-        for r in self.robots:
-            r.update_position()
+            self.robots[i].update_position()
 
         # Compute reward & check done
-        reward = self._compute_reward()
         obs = self._get_observation()
+        reward = self._compute_reward()
         done = (self.current_step >= self.max_steps)
         info = {}
 
@@ -203,36 +208,27 @@ class PatrolEnv(gym.Env):
         patrol_positions = get_patrol_positions(self.central_obj, self.patrol_radius)
 
         total_reward = 0.0
+        #for i, robot in enumerate(self.robots):
         for i, robot in enumerate(self.robots):
-            # normalized position
-            rx_norm = robot.x / float(GRID_SIZE)  # from [0..1000]? or 100?
-            ry_norm = robot.y / float(GRID_SIZE)
 
-            # likewise for patrol pos
-            desired_x, desired_y = patrol_positions[i % len(patrol_positions)]
-            desired_x_norm = desired_x / float(GRID_SIZE)
-            desired_y_norm = desired_y / float(GRID_SIZE)
+            #desired_x, desired_y = patrol_positions[i % len(patrol_positions)]
+            desired_x, desired_y = self.central_obj.x, self.central_obj.y #Testing
 
-            #dist = sqrt((rx_norm - desired_x_norm)**2 + (ry_norm - desired_y_norm)**2)
             dist = sqrt((robot.x-desired_x)**2 + (robot.y-desired_y)**2)
 
             # base negative
-            partial = -dist/500
+            partial = -dist/1000
 
             # check improvement from last step
             if self.prev_distances[i] is not None:
                 if dist < self.prev_distances[i]:
-                    partial += 15.0  # small bonus if improved
+                    partial += 150.0  # small bonus if improved
             # store current distance
             self.prev_distances[i] = dist
 
-            # success bonus
-            # in normalized scale, 5 in real scale = 5/GRID_SIZE in normalized
-            # for GRID_SIZE=1000 => 5/1000=0.005
-            # for smaller domain => adjust accordingly
-            success_thresh = 1
+            success_thresh = 5
             if dist < success_thresh:
-                partial += 100.0
+                partial += 1000.0
 
             # collision penalty
             for j, other_r in enumerate(self.robots):
@@ -242,45 +238,62 @@ class PatrolEnv(gym.Env):
                     if sqrt(dx*dx + dy*dy) < 1.0: # if < 1.0 => collision
                         partial -= 0.5
 
+            if SINGLE_ROBOT:
+                if i == 1: # Only compute reward for 1 robot  
+                    total_reward += partial
+                    if DEBUGGING:
+                        print(f"Total Reward: {total_reward}")
+                    return total_reward
+            
             total_reward += partial
 
         if DEBUGGING:
             print(f"Total Reward: {total_reward}")
 
         # Add the new reward to the buffer
-        self.reward_buffer.append(total_reward)
-        if len(self.reward_buffer) > self.reward_smoothing_window:
-            self.reward_buffer.pop(0)
+        #self.reward_buffer.append(total_reward)
+        #if len(self.reward_buffer) > self.reward_smoothing_window:
+        #    self.reward_buffer.pop(0)
 
         # Calculate smoothed reward as the average
-        smoothed_reward = np.mean(self.reward_buffer)
+        #smoothed_reward = np.mean(self.reward_buffer)
 
-        return smoothed_reward
+        #return smoothed_reward
+
+        return total_reward
 
     def _build_state(self):
         """
-        Construct the current state of the environment.
-        The state should include:
-        - Positions and velocities of robots
-        - Position of the central object
-        - Positions of all targets
+        Construct the normalized current state of the environment.
+        - Positions normalized to [0, 1] based on GRID_SIZE.
+        - Velocities normalized to [-1, 1] based on max_speed.
         """
         # Robot states: x, y, vx, vy for each robot
         robot_states = []
         for robot in self.robots:
-            robot_states.extend([robot.x, robot.y, robot.vx, robot.vy])
+            robot_states.extend([
+                robot.x / float(GRID_SIZE),  # Normalize positions to [0, 1]
+                robot.y / float(GRID_SIZE),
+                robot.vx / float(self.max_speed),  # Normalize velocities to [-1, 1]
+                robot.vy / float(self.max_speed)
+            ])
 
         # Central object state: x, y
-        central_state = [self.central_obj.x, self.central_obj.y]
+        central_state = [
+            self.central_obj.x / float(GRID_SIZE),
+            self.central_obj.y / float(GRID_SIZE)
+        ]
 
         # Target states: x, y for each target
         target_states = []
         for target in self.targets:
-            target_states.extend([target.x, target.y])
+            target_states.extend([
+                target.x / float(GRID_SIZE),
+                target.y / float(GRID_SIZE)
+            ])
 
         # Combine all states into a single array
         state = np.array(robot_states + central_state + target_states, dtype=np.float32)
-
         return state
 
     def _get_observation(self):
@@ -304,10 +317,19 @@ class PatrolEnv(gym.Env):
 def main():
     from stable_baselines3 import PPO
 
+    def linear_schedule(initial_value: float):
+        """
+        Linear schedule function for learning rate.
+        Decreases linearly from `initial_value` to 0.
+        """
+        def schedule(progress_remaining: float):
+            return progress_remaining * initial_value
+        return schedule
+
     env = PatrolEnv(
         num_robots=4,
         num_targets=15,
-        max_speed=10,
+        max_speed=20,
         patrol_radius=3.0,
         max_steps=2000,
         epsilon=1.0,
@@ -318,8 +340,8 @@ def main():
 
     policy_kwargs = dict(
         features_extractor_class=TransformerFeatureExtractor,
-        features_extractor_kwargs=dict(embed_dim=72, num_heads=3, ff_hidden=128, num_layers=4, seq_len=12),
-        net_arch=[128, 256, 128, 64],  # Optional feedforward layers after transformer
+        features_extractor_kwargs=dict(embed_dim=90, num_heads=5, ff_hidden=256, num_layers=7, seq_len=20),
+        net_arch=[128, 256, 128, 64],  # Optional feedforward layers after transformer - can be specified for output to action and (future) value estimation
     )
 
     model = PPO(
@@ -330,15 +352,17 @@ def main():
         normalize_advantage = True, #??
         use_sde = False, # Essentially reducing delta of actions when rewards are very positive
         #sde_sample_freq = 3,
-        learning_rate=0.003,
-        n_steps=1000,
-        batch_size=250,
+        learning_rate=linear_schedule(initial_value= 0.0003),
+        n_steps=4000, # 2x the episode length which automatically terminates
+        batch_size=1000,
         gamma=0.9,
-        clip_range=0.2,
+        gae_lambda= 0.95,
+        clip_range=0.5, #Clips larger updates to remain within +- 80%
         ent_coef=0.05,
         tensorboard_log="./Patrol&Protect_PPO/ppo_patrol_tensorboard/"
     )
 
+    #total_timesteps = 10_000
     total_timesteps = 1_000_000
     model.learn(total_timesteps=total_timesteps)
 
