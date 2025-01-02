@@ -16,7 +16,7 @@ import matplotlib.pyplot as plt
 
 from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import DummyVecEnv
-from stable_baselines3.common.policies import ActorCriticPolicy
+from stable_baselines3.common.policies import ActorCriticPolicy,MultiInputActorCriticPolicy
 from gym.spaces import MultiDiscrete, Box
 
 from shared_utils import (
@@ -208,27 +208,29 @@ class PatrolEnv(gym.Env):
         patrol_positions = get_patrol_positions(self.central_obj, self.patrol_radius)
 
         total_reward = 0.0
+        distance_reward = [0] * len(self.robots)
         #for i, robot in enumerate(self.robots):
         for i, robot in enumerate(self.robots):
-
+            
+            distance_reward[i] = 0
             #desired_x, desired_y = patrol_positions[i % len(patrol_positions)]
             desired_x, desired_y = self.central_obj.x, self.central_obj.y #Testing
 
             dist = sqrt((robot.x-desired_x)**2 + (robot.y-desired_y)**2)
 
             # base negative
-            partial = -dist/1000
+            distance_reward[i] = -dist/GRID_SIZE
 
             # check improvement from last step
             if self.prev_distances[i] is not None:
                 if dist < self.prev_distances[i]:
-                    partial += 150.0  # small bonus if improved
+                    distance_reward[i] += 0.5*GRID_SIZE  # small bonus if improved
             # store current distance
             self.prev_distances[i] = dist
 
-            success_thresh = 5
-            if dist < success_thresh:
-                partial += 1000.0
+            #success_thresh = 5
+            #if dist < success_thresh:
+            #    partial += 1000.0
 
             # collision penalty
             for j, other_r in enumerate(self.robots):
@@ -236,16 +238,18 @@ class PatrolEnv(gym.Env):
                     dx = (robot.x - other_r.x)
                     dy = (robot.y - other_r.y)
                     if sqrt(dx*dx + dy*dy) < 1.0: # if < 1.0 => collision
-                        partial -= 0.5
+                        distance_reward[i] -= 0.5*GRID_SIZE
 
             if SINGLE_ROBOT:
                 if i == 1: # Only compute reward for 1 robot  
-                    total_reward += partial
+                    total_reward += distance_reward[i]
                     if DEBUGGING:
                         print(f"Total Reward: {total_reward}")
                     return total_reward
             
-            total_reward += partial
+            distance_reward[i] = max(-10*GRID_SIZE, min(1*GRID_SIZE, distance_reward[i]*GRID_SIZE))
+            
+        total_reward += sum(distance_reward)
 
         if DEBUGGING:
             print(f"Total Reward: {total_reward}")
@@ -346,6 +350,7 @@ def main():
 
     model = PPO(
         policy=ActorCriticPolicy,
+        #policy=MultiInputActorCriticPolicy,
         policy_kwargs=policy_kwargs,
         env=vec_env,
         verbose=1,
@@ -357,9 +362,9 @@ def main():
         batch_size=1000,
         gamma=0.9,
         gae_lambda= 0.95,
-        clip_range=0.5, #Clips larger updates to remain within +- 80%
+        clip_range=0.2, #Clips larger updates to remain within +- 80%
         ent_coef=0.05,
-        tensorboard_log="./Patrol&Protect_PPO/ppo_patrol_tensorboard/"
+        #tensorboard_log="./Patrol&Protect_PPO/ppo_patrol_tensorboard/"
     )
 
     #total_timesteps = 10_000

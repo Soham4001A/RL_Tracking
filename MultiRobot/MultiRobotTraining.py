@@ -7,9 +7,9 @@ from collections import deque
 import matplotlib.pyplot as plt
 
 # Environment Parameters
-GRID_SIZE = 100
+GRID_SIZE = 1000
 TIME_STEP = 0.1
-MAX_SPEED = 10
+MAX_SPEED = 20
 
 # RL Parameters
 NUM_ROBOTS = 4
@@ -37,7 +37,7 @@ class Actor:
         self.max_speed = max_speed
         self.time = 0
 
-    def update_fixed_path(self, side_length=30, center=(50, 50), speed=0.05):
+    def update_fixed_path(self, side_length=300, center=(500, 500), speed=0.05):
         # Square path for the target
         perimeter = 4 * side_length
         self.time += speed * TIME_STEP
@@ -194,7 +194,7 @@ def run_simulation(agent, robots, target, num_steps=200, epsilon=0.1):
 
 # Main Training Loop
 robots = [Actor(GRID_SIZE / 2, GRID_SIZE / 2, MAX_SPEED) for _ in range(NUM_ROBOTS)]
-target = Actor(50, 50, MAX_SPEED)
+target = Actor(500, 500, MAX_SPEED)
 agent = Agent(STATE_DIM, ACTION_SIZE)
 
 rewards = []
