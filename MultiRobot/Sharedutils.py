@@ -1,7 +1,7 @@
 # Environment Parameters
 GRID_SIZE = 100
 TIME_STEP = 0.1
-MAX_SPEED = 20
+MAX_SPEED = 10
 NUM_ROBOTS = 4
 
 import torch.nn as nn

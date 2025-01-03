@@ -224,7 +224,7 @@ class PatrolEnv(gym.Env):
             # check improvement from last step
             if self.prev_distances[i] is not None:
                 if dist < self.prev_distances[i]:
-                    distance_reward[i] += 0.5*GRID_SIZE  # small bonus if improved
+                    distance_reward[i] += 0.5*dist  # small bonus if improved
             # store current distance
             self.prev_distances[i] = dist
 
