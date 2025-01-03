@@ -7,7 +7,7 @@ from collections import deque
 import matplotlib.pyplot as plt
 
 # Environment Parameters
-GRID_SIZE = 1000
+GRID_SIZE = 100
 TIME_STEP = 0.1
 MAX_SPEED = 20
 
@@ -37,7 +37,7 @@ class Actor:
         self.max_speed = max_speed
         self.time = 0
 
-    def update_fixed_path(self, side_length=300, center=(500, 500), speed=0.05):
+    def update_fixed_path(self, side_length=30, center=(50, 50), speed=0.05):
         # Square path for the target
         perimeter = 4 * side_length
         self.time += speed * TIME_STEP
@@ -194,11 +194,11 @@ def run_simulation(agent, robots, target, num_steps=200, epsilon=0.1):
 
 # Main Training Loop
 robots = [Actor(GRID_SIZE / 2, GRID_SIZE / 2, MAX_SPEED) for _ in range(NUM_ROBOTS)]
-target = Actor(500, 500, MAX_SPEED)
+target = Actor(50, 50, MAX_SPEED)
 agent = Agent(STATE_DIM, ACTION_SIZE)
 
 rewards = []
-for episode in range(10000):
+for episode in range(1000):
     epsilon = max(0.1, 1 - episode / 1000)
     # Reinitialize robot positions for each episode if desired:
     # (Optional) For stability, you might reset robots to center:
@@ -214,5 +214,5 @@ plt.ylabel("Total Reward (All Robots)")
 plt.title("Reward Progression with Multiple Robots & Collision Avoidance")
 plt.show()
 
-torch.save(agent.policy_network.state_dict(), "simple_rl_model_multi_robot.pth")
+torch.save(agent.policy_network.state_dict(), "MultiRobot/simple_rl_model_multi_robot.pth")
 print("Model saved successfully!")

@@ -5,7 +5,7 @@ from matplotlib.animation import FuncAnimation
 from math import sqrt
 
 # Environment Parameters
-GRID_SIZE = 1000
+GRID_SIZE = 100
 TIME_STEP = 0.1
 NUM_ROBOTS = 4
 MAX_SPEED = 20
@@ -29,7 +29,7 @@ class Actor:
         self.x = max(0, min(self.x, GRID_SIZE))
         self.y = max(0, min(self.y, GRID_SIZE))
 
-    def update_fixed_path(self, side_length=300, center=(500, 500), speed=0.05):
+    def update_fixed_path(self, side_length=30, center=(50, 50), speed=0.05):
         # Calculate the total perimeter of the square
         perimeter = 4 * side_length
         # Calculate the current position along the perimeter based on time
