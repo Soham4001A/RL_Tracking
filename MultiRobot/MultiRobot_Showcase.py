@@ -3,77 +3,17 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 from math import sqrt
+from Sharedutils import *
 
-# Environment Parameters
-GRID_SIZE = 100
-TIME_STEP = 0.1
-NUM_ROBOTS = 4
-MAX_SPEED = 20
+
 STATE_SIZE = 4 + 2 * (NUM_ROBOTS - 1)
 ACTION_SIZE = 5  # [up, down, left, right, stay]
 
 
-# Actor class for robots and target
-class Actor:
-    def __init__(self, x, y, max_speed):
-        self.x = x
-        self.y = y
-        self.vx = 0
-        self.vy = 0
-        self.max_speed = max_speed
-        self.time = 0
-
-    def update_position(self):
-        self.x += self.vx * TIME_STEP
-        self.y += self.vy * TIME_STEP
-        self.x = max(0, min(self.x, GRID_SIZE))
-        self.y = max(0, min(self.y, GRID_SIZE))
-
-    def update_fixed_path(self, side_length=30, center=(50, 50), speed=0.05):
-        # Calculate the total perimeter of the square
-        perimeter = 4 * side_length
-        # Calculate the current position along the perimeter based on time
-        self.time += speed * TIME_STEP
-        distance_along_perimeter = (self.time * perimeter) % perimeter
-
-        # Determine which side of the square the target is on
-        if distance_along_perimeter < side_length:
-            # Top side: move right
-            self.x = center[0] - side_length / 2 + distance_along_perimeter
-            self.y = center[1] - side_length / 2
-        elif distance_along_perimeter < 2 * side_length:
-            # Right side: move down
-            self.x = center[0] + side_length / 2
-            self.y = center[1] - side_length / 2 + (distance_along_perimeter - side_length)
-        elif distance_along_perimeter < 3 * side_length:
-            # Bottom side: move left
-            self.x = center[0] + side_length / 2 - (distance_along_perimeter - 2 * side_length)
-            self.y = center[1] + side_length / 2
-        else:
-            # Left side: move up
-            self.x = center[0] - side_length / 2
-            self.y = center[1] + side_length / 2 - (distance_along_perimeter - 3 * side_length)
-
-    def set_velocity(self, vx, vy):
-        self.vx = np.clip(vx, -self.max_speed, self.max_speed)
-        self.vy = np.clip(vy, -self.max_speed, self.max_speed)
-
-# Neural network model
-class UpdatedModel(torch.nn.Module):
-    def __init__(self, state_size, action_size):
-        super(UpdatedModel, self).__init__()
-        self.fc = torch.nn.Sequential(
-            torch.nn.Linear(state_size, 64),
-            torch.nn.ReLU(),
-            torch.nn.Linear(64, action_size)
-        )
-
-    def forward(self, state):
-        return self.fc(state)
 
 # Load trained model
 def load_model(model_path, state_size, action_size):
-    model = UpdatedModel(state_size, action_size)
+    model = SimpleNN(state_size, action_size)
     try:
         model.load_state_dict(torch.load(model_path))
         print("Model weights loaded successfully!")
