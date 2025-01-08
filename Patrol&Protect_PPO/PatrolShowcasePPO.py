@@ -14,8 +14,8 @@ EPISODE_STEPS = 20000
 def run_showcase(model_path="ppo_patrol_model.zip"):
     # Create environment (ensure history_length matches the training env)
     env = PatrolEnv(
-        num_robots=4,
-        num_targets=15,
+        num_robots=1,
+        num_targets=1,
         max_speed=10,
         patrol_radius=4.0,
         max_steps=EPISODE_STEPS,

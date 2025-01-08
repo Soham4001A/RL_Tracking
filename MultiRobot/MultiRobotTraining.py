@@ -176,7 +176,7 @@ target = Actor(50, 50, MAX_SPEED)
 agent = Agent(STATE_DIM, ACTION_SIZE)
 
 rewards = []
-for episode in range(3000):
+for episode in range(10000):
     epsilon = max(0.1, 1 - episode / 1000)
     # Reinitialize robot positions for each episode if desired:
     # (Optional) For stability, you might reset robots to center:

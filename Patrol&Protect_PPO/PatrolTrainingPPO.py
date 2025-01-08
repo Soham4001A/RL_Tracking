@@ -35,7 +35,7 @@ class PatrolEnv(gym.Env):
 
     def __init__(
         self,
-        num_robots=4,
+        num_robots=1,
         num_targets=1, #Testing
         #num_targets = 15, 
         max_speed=20,
@@ -198,71 +198,68 @@ class PatrolEnv(gym.Env):
 
     def _compute_reward(self):
         """
-        Reward shaping approach:
-          1) Convert positions to [0..1], get distance to patrol position in [0..sqrt(2)] range
-          2) -dist/200 each step
-          3) If distance improved from last step => +1
-          4) If distance < 5 => +100 (success)
-          5) small collision penalty if overlap
+        Reward shaping approach with normalization:
+        1) Convert positions to [0..1] => distance in [0..√2] if everything's within [0..1].
+        2) Penalize distance proportionally (e.g., -dist_norm).
+        3) If distance improved from last step => give a small positive bonus.
+        4) Collision penalty is applied in normalized space.
+        5) Optionally clamp reward to [-10, 1] or any range that works best for your environment.
         """
         patrol_positions = get_patrol_positions(self.central_obj, self.patrol_radius)
 
         total_reward = 0.0
         distance_reward = [0] * len(self.robots)
-        #for i, robot in enumerate(self.robots):
+
         for i, robot in enumerate(self.robots):
-            
-            distance_reward[i] = 0
-            #desired_x, desired_y = patrol_positions[i % len(patrol_positions)]
-            desired_x, desired_y = self.central_obj.x, self.central_obj.y #Testing
+            # 1) Calculate normalized distance to the central object
+            desired_x, desired_y = self.central_obj.x, self.central_obj.y
+            dx = (robot.x - desired_x) / float(GRID_SIZE)
+            dy = (robot.y - desired_y) / float(GRID_SIZE)
+            dist_norm = np.sqrt(dx**2 + dy**2)
 
-            dist = sqrt((robot.x-desired_x)**2 + (robot.y-desired_y)**2)
+            # 2) Base negative reward for being far from the central object
+            #    e.g. -dist_norm, so at max distance ~√2, it’s about -1.41
+            distance_reward[i] = -dist_norm
 
-            # base negative
-            distance_reward[i] = -dist/GRID_SIZE
-
-            # check improvement from last step
+            # 3) Check improvement from the last step
+            #    Compare normalized distances if you stored them previously,
+            #    otherwise store the raw distance but convert back to normalized.
             if self.prev_distances[i] is not None:
-                if dist < self.prev_distances[i]:
-                    distance_reward[i] += 0.5*dist  # small bonus if improved
-            # store current distance
-            self.prev_distances[i] = dist
+                prev_dist_norm = self.prev_distances[i] / float(GRID_SIZE)
+                if dist_norm < prev_dist_norm:
+                    # small bonus for improvement (using normalized distance)
+                    # you could reward the difference or a fixed bonus
+                    distance_reward[i] += 1 * (prev_dist_norm - dist_norm)
+            # Store current raw distance for next step’s comparison
+            self.prev_distances[i] = np.sqrt((robot.x - desired_x)**2 + (robot.y - desired_y)**2)
 
-            #success_thresh = 5
-            #if dist < success_thresh:
-            #    partial += 1000.0
-
-            # collision penalty
+            # 4) Collision penalty in normalized space
+            #    Suppose we consider < 0.01 in normalized terms as a collision
             for j, other_r in enumerate(self.robots):
                 if j != i:
-                    dx = (robot.x - other_r.x)
-                    dy = (robot.y - other_r.y)
-                    if sqrt(dx*dx + dy*dy) < 1.0: # if < 1.0 => collision
-                        distance_reward[i] -= 0.5*GRID_SIZE
+                    dx_other = (robot.x - other_r.x) / float(GRID_SIZE)
+                    dy_other = (robot.y - other_r.y) / float(GRID_SIZE)
+                    dist_to_other_norm = np.sqrt(dx_other**2 + dy_other**2)
+                    if dist_to_other_norm < 0.01:  # ~1% of your entire grid
+                        distance_reward[i] -= 0.5  # fixed penalty or scale as you like
 
+            # (Optional) If you only compute reward for one robot
             if SINGLE_ROBOT:
-                if i == 1: # Only compute reward for 1 robot  
+                if i == 1:  # e.g., only the second robot’s reward matters
                     total_reward += distance_reward[i]
                     if DEBUGGING:
                         print(f"Total Reward: {total_reward}")
                     return total_reward
-            
-            distance_reward[i] = max(-10*GRID_SIZE, min(1*GRID_SIZE, distance_reward[i]*GRID_SIZE))
-            
+
+            # 5) Clamp/clip the reward in normalized space
+            #    For example, clipping to [-10, 1]:
+            #distance_reward[i] = max(-GRID_SIZE, min(distance_reward[i], GRID_SIZE))
+
         total_reward += sum(distance_reward)
+        total_reward = max(-GRID_SIZE, min(total_reward, GRID_SIZE))
 
         if DEBUGGING:
-            print(f"Total Reward: {total_reward}")
-
-        # Add the new reward to the buffer
-        #self.reward_buffer.append(total_reward)
-        #if len(self.reward_buffer) > self.reward_smoothing_window:
-        #    self.reward_buffer.pop(0)
-
-        # Calculate smoothed reward as the average
-        #smoothed_reward = np.mean(self.reward_buffer)
-
-        #return smoothed_reward
+            print(f"Total STEP Reward: {total_reward}")
 
         return total_reward
 
@@ -367,8 +364,8 @@ def main():
         #tensorboard_log="./Patrol&Protect_PPO/ppo_patrol_tensorboard/"
     )
 
-    #total_timesteps = 10_000
-    total_timesteps = 1_000_000
+    total_timesteps = 100_000
+    #total_timesteps = 1_000_000
     model.learn(total_timesteps=total_timesteps)
 
     print(f"Final Epsilon: {env.epsilon:.4f}")  # Log final epsilon
