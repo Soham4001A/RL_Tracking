@@ -8,11 +8,11 @@ from stable_baselines3.common.policies import ActorCriticPolicy
 from stable_baselines3.common.distributions import MultiCategoricalDistribution
 
 # Constants
-GRID_SIZE = 1000
+GRID_SIZE = 100
 TIME_STEP = 0.1
 
 # Patrol Radius
-PATROL_RADIUS = sqrt((3)**2 + (3)**2)
+PATROL_RADIUS = sqrt((1)**2 + (1)**2)
 
 # Action Maps
 ACTION_MAP = {

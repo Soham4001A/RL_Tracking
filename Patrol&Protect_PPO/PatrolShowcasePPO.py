@@ -8,13 +8,13 @@ from stable_baselines3.common.vec_env import DummyVecEnv
 from shared_utils import CentralObject, AdversarialTarget, Actor, get_patrol_positions
 from PatrolTrainingPPO import PatrolEnv
 
-GRID_SIZE = 1000
+GRID_SIZE = 100
 EPISODE_STEPS = 20000
 
 def run_showcase(model_path="ppo_patrol_model.zip"):
     # Create environment (ensure history_length matches the training env)
     env = PatrolEnv(
-        num_robots=1,
+        num_robots=4,
         num_targets=1,
         max_speed=10,
         patrol_radius=4.0,

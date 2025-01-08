@@ -33,12 +33,11 @@ class PatrolEnv(gym.Env):
     - Positions normalized to [0,1] range for simpler distance scale.
     """
 
-    def __init__(
+    def __init__(  #Default Params -> These are set in the definition
         self,
-        num_robots=1,
-        num_targets=1, #Testing
-        #num_targets = 15, 
-        max_speed=20,
+        num_robots=4,
+        num_targets=1,
+        max_speed=10,
         patrol_radius=4.0,
         max_steps=2000,
         epsilon=1.0,
@@ -74,7 +73,8 @@ class PatrolEnv(gym.Env):
         self.state_history = []
 
         # Some large domain, e.g. 1000x1000, but we'll normalize to [0,1]
-        self.central_waypoints = [(800, 200), (800, 800), (200, 800), (800, 200)]
+        #self.central_waypoints = [(800, 200), (800, 800), (200, 800), (200, 200)]
+        self.central_waypoints = [(80, 20), (80, 80), (20, 80), (20, 20)]
         self.central_obj = None
         self.robots = []
         self.targets = []
@@ -101,7 +101,7 @@ class PatrolEnv(gym.Env):
         for i in range(self.num_robots):
             px, py = patrol_positions[i % len(patrol_positions)]
             #r = Actor(px, py, self.max_speed)
-            r = Actor(500, 500, self.max_speed) #Testing starting away from Central Obj
+            r = Actor(50, 50, self.max_speed) #Testing starting away from Central Obj
             self.robots.append(r)
             self.prev_distances[i] = None  # Reset previous distance
 
@@ -143,10 +143,11 @@ class PatrolEnv(gym.Env):
             [(np.random.randint(450,550), np.random.randint(450,550)) for _ in range(5)]
         ]
 
-        #Testing
+        #Testing for reducing num_targets and giving them the same path
         waypoints_targets.clear()
         for i in range (self.num_targets):
-            waypoints_targets.append([(200, 200), (200, 400), (400, 400), (400, 200)])
+            #waypoints_targets.append([(200, 200), (200, 400), (400, 400), (400, 200)])
+            waypoints_targets.append([(20, 20), (20, 40), (40, 40), (40, 20)])
 
         targets = []
         for i in range(self.num_targets):
@@ -219,7 +220,15 @@ class PatrolEnv(gym.Env):
 
             # 2) Base negative reward for being far from the central object
             #    e.g. -dist_norm, so at max distance ~√2, it’s about -1.41
-            distance_reward[i] = -dist_norm
+
+            distance_reward[i] = -dx #Split x,y??
+            distance_reward[i] = -dy
+
+            close_proxim_x = robot.x - desired_x
+            close_proxim_y = robot.y - desired_y
+
+            if close_proxim_x and close_proxim_y < 5:
+                distance_reward[i] += 50
 
             # 3) Check improvement from the last step
             #    Compare normalized distances if you stored them previously,
@@ -229,7 +238,7 @@ class PatrolEnv(gym.Env):
                 if dist_norm < prev_dist_norm:
                     # small bonus for improvement (using normalized distance)
                     # you could reward the difference or a fixed bonus
-                    distance_reward[i] += 1 * (prev_dist_norm - dist_norm)
+                    distance_reward[i] += 5
             # Store current raw distance for next step’s comparison
             self.prev_distances[i] = np.sqrt((robot.x - desired_x)**2 + (robot.y - desired_y)**2)
 
@@ -240,7 +249,7 @@ class PatrolEnv(gym.Env):
                     dx_other = (robot.x - other_r.x) / float(GRID_SIZE)
                     dy_other = (robot.y - other_r.y) / float(GRID_SIZE)
                     dist_to_other_norm = np.sqrt(dx_other**2 + dy_other**2)
-                    if dist_to_other_norm < 0.01:  # ~1% of your entire grid
+                    if dist_to_other_norm < 0.1:  
                         distance_reward[i] -= 0.5  # fixed penalty or scale as you like
 
             # (Optional) If you only compute reward for one robot
@@ -253,7 +262,7 @@ class PatrolEnv(gym.Env):
 
             # 5) Clamp/clip the reward in normalized space
             #    For example, clipping to [-10, 1]:
-            #distance_reward[i] = max(-GRID_SIZE, min(distance_reward[i], GRID_SIZE))
+            distance_reward[i] = max(-GRID_SIZE, min(distance_reward[i], GRID_SIZE))
 
         total_reward += sum(distance_reward)
         total_reward = max(-GRID_SIZE, min(total_reward, GRID_SIZE))
@@ -328,10 +337,10 @@ def main():
         return schedule
 
     env = PatrolEnv(
-        num_robots=4,
-        num_targets=15,
-        max_speed=20,
-        patrol_radius=3.0,
+        num_robots=4, 
+        num_targets=1, # Testing
+        max_speed=10,
+        patrol_radius=1.0,
         max_steps=2000,
         epsilon=1.0,
         epsilon_min=0.1,
@@ -354,17 +363,17 @@ def main():
         normalize_advantage = True, #??
         use_sde = False, # Essentially reducing delta of actions when rewards are very positive
         #sde_sample_freq = 3,
-        learning_rate=linear_schedule(initial_value= 0.0003),
+        learning_rate=linear_schedule(initial_value= 0.003),
         n_steps=4000, # 2x the episode length which automatically terminates
-        batch_size=1000,
-        gamma=0.9,
+        batch_size=500,
+        gamma=0.7,
         gae_lambda= 0.95,
-        clip_range=0.2, #Clips larger updates to remain within +- 80%
+        clip_range=0.5, #Clips larger updates to remain within +- 50%
         ent_coef=0.05,
         #tensorboard_log="./Patrol&Protect_PPO/ppo_patrol_tensorboard/"
     )
 
-    total_timesteps = 100_000
+    total_timesteps = 10_000
     #total_timesteps = 1_000_000
     model.learn(total_timesteps=total_timesteps)
 
