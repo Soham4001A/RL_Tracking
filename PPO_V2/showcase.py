@@ -13,7 +13,7 @@ from simulation import PPOEnv
 from globals import *
 
 # Visualization parameters
-NUM_CCA = 1 #Add this to globals
+NUM_CCA = num_cca
 STEPS = 100
 
 class ShowcaseSimulation:

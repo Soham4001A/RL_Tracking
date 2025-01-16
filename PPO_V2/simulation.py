@@ -25,6 +25,7 @@ class PPOEnv(gym.Env):
 
         # Action space: Softmax for movement in 6 directions (X+, X-, Y+, Y-, Z+, Z-)
         self.action_space = spaces.Discrete(6)
+        # TODO: Eventually this needs to actually be a multi discrete action space where each robot will have a different action
 
         # Initialize positions
         self.cca_positions = [np.array([100, 100, 100]) for _ in range(num_cca)]
@@ -107,7 +108,7 @@ class PPOEnv(gym.Env):
 
 
 if __name__ == "__main__":
-    env = PPOEnv(grid_size=grid_size, num_cca=1)
+    env = PPOEnv(grid_size=grid_size, num_cca=num_cca)
     model = PPO("MlpPolicy", env, verbose=1)
 
     # Train the model
