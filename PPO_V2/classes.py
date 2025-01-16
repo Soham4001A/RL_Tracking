@@ -3,6 +3,9 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 from matplotlib.animation import FuncAnimation
 
+# Internal Module Imports
+from globals import *
+
 class BaseObject:
     """Base class for objects in the simulation."""
     def __init__(self, name, initial_position, color='blue'):
@@ -95,15 +98,34 @@ class SimulationEngine:
         self.ax.legend()
 
 
-# Example usage
+# Movement Functions
 def cca_movement_fn(position):
-    """Movement function for CCA objects."""
+    """Movement function for CCA objects -> Basic"""
     return position + np.array([10, 0, 10])
 
 
 def foxtrot_movement_fn(position):
-    """Movement function for Foxtrot objects to move in a random pattern."""
-    step_size = 10  # Maximum step size in any direction
-    random_step = np.random.randint(-step_size, step_size + 1, size=3)  # Random step for X, Y, Z
-    return position + random_step
+    """Generate random movement for Foxtrot with dynamic edge handling."""
+    step_size = 10  # Define step size
+    direction_probabilities = [1, 1, 1]  # Weights for [X, Y, Z] movement
+    
+    # Randomly choose which axes to move on
+    axes_to_move = np.random.choice([0, 1, 2], size=3, replace=False, p=np.array(direction_probabilities) / sum(direction_probabilities))
+
+    # Generate random movement for each selected axis
+    random_step = np.zeros(3, dtype=int)
+    for axis in axes_to_move:
+        random_step[axis] = np.random.choice([-step_size, step_size])
+
+    # Update position
+    new_position = position + random_step
+
+    # Handle edges by bouncing back
+    for i in range(3):
+        if new_position[i] < 0:
+            new_position[i] = abs(new_position[i])  # Reflect back
+        elif new_position[i] > grid_size:
+            new_position[i] = grid_size - (new_position[i] - grid_size)  # Reflect back from upper edge
+
+    return new_position
     
