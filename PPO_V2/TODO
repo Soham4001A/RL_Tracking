@@ -1,0 +1,5 @@
+1. Ensure that when expanding CCA's - we have correct input shaping -> see o1 suggestion
+2. Ensure that when expanding CCA's - Move to MultiDiscrete
+3. Fix Path for Foxtrot
+4. Add random location spawing for CCA's to train 
+5. Add random location spawing for Foxtrot to train & Random Route picker

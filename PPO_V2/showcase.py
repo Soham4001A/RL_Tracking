@@ -14,7 +14,7 @@ from globals import *
 
 # Visualization parameters
 NUM_CCA = num_cca
-STEPS = 100
+STEPS = 10000
 
 class ShowcaseSimulation:
     def __init__(self, model_path, env, steps):
