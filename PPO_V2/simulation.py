@@ -12,6 +12,7 @@ from globals import *
 DEBUG = True
 REWARD_DEBUG = True
 POSITIONAL_DEBUG = False
+REWARD_BASIC = False
 
 class PPOEnv(gym.Env):
     """Custom PPO Environment for controlling CCA objects."""
@@ -19,6 +20,8 @@ class PPOEnv(gym.Env):
         super(PPOEnv, self).__init__()
         self.grid_size = grid_size
         self.num_cca = num_cca
+        self.current_step = 0
+        self.max_steps = 10_000
         self.cube_state = {}
 
         # Action space: Continuous movement in 3D space
@@ -84,12 +87,14 @@ class PPOEnv(gym.Env):
         # Calculate reward
         reward = self._calculate_reward()
 
-        # Check if any CCA overlaps Foxtrot
-        terminated = any(np.array_equal(pos, self.foxtrot_position) for pos in self.cca_positions)
+        # End Condition Check
+        self.current_step += 1
 
-        # Define truncated as False for now (no time limit)
-        truncated = False
+        truncated = self.current_step >= self.max_steps # Hard stop end 
 
+        # Define terminated as false since we do not have a natural end point
+        terminated = False
+    
         return self._get_observation(), reward, terminated, truncated, {}
 
     def _get_observation(self):
@@ -108,7 +113,7 @@ class PPOEnv(gym.Env):
         """Calculate the reward based on the distance to Foxtrot with aggressive scaling."""
         reward = 0
         alpha = 500  # Reward for reducing distance
-        beta = 0.5  # Penalty for being far away
+        beta = 0.9  # Penalty for being far away
 
         for i, pos in enumerate(self.cca_positions):
             distance = np.linalg.norm(pos - self.foxtrot_position)
@@ -134,7 +139,20 @@ class PPOEnv(gym.Env):
             print(f"Reward is {reward}")
 
         return reward
+    
+    if REWARD_BASIC:
+        def _calculate_reward(self):
+            """Calculate the reward based on the distance to Foxtrot with aggressive scaling."""
+            reward = 0
+            
+            for i, pos in enumerate(self.cca_positions):
+                distance = np.linalg.norm(pos - self.foxtrot_position)
+                reward = -distance/10
 
+            if REWARD_DEBUG:
+                print(f"Reward is {reward}")
+
+            return reward
 
 if __name__ == "__main__":
 
@@ -175,7 +193,7 @@ if __name__ == "__main__":
     )
 
     # Train the model
-    model.learn(total_timesteps=10_000)
+    model.learn(total_timesteps=100_000)
 
     # Save the model
     model.save("./PPO_V2/Trained_Model")
