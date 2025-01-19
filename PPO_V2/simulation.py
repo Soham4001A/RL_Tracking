@@ -1,6 +1,6 @@
-import gym
-from gym import spaces
-from gym.spaces import Box
+import gymnasium as gym
+from gymnasium import spaces
+from gymnasium.spaces import Box
 import numpy as np
 from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import DummyVecEnv
@@ -26,10 +26,12 @@ class PPOEnv(gym.Env):
             low=-step_size, high=step_size, shape=(self.num_cca, 3), dtype=np.float32
         )
 
-        # Observation space: Positions of all CCA objects and Foxtrot
-        # Observation space: Positions of all CCA objects and Foxtrot (including history of 5 positions)
+        # Observation space: Includes last 5 positions for CCAs and Foxtrot
         self.observation_space = spaces.Box(
-            low=0, high=self.grid_size, shape=(3 * (self.num_cca + 1) * 6,), dtype=np.float32
+            low=0,
+            high=self.grid_size,
+            shape=(3 * self.num_cca * 6 + 3 * 6,),  # Add 6 sets of 3D positions for Foxtrot
+            dtype=np.float32
         )
 
         # Initialize positions
@@ -39,15 +41,20 @@ class PPOEnv(gym.Env):
 
         # Initialize history for last 5 positions
         self.cca_history = [np.tile(pos, (6, 1)) for pos in self.cca_positions]
-        self.foxtrot_history = np.tile(self.foxtrot_position, (6, 1))
+        self.foxtrot_history = np.tile(self.foxtrot_position, (6, 1))  # 6 rows for 5 past + current position
 
-    def reset(self):
+    def reset(self, seed=None, **kwargs):
         """Reset the environment to the initial state."""
+        super().reset(seed=seed)  # Properly seed the environment
+
         self.cca_positions = [np.array([100, 100, 100]) for _ in range(self.num_cca)]
         self.foxtrot_position = np.array([200, 200, 200])
         self.cca_history = [np.tile(pos, (6, 1)) for pos in self.cca_positions]
-        self.foxtrot_history = np.tile(self.foxtrot_position, (6, 1))
-        return self._get_observation()
+        self.foxtrot_history = np.tile(self.foxtrot_position, (6, 1))  # Reset Foxtrot history
+
+        obs = self._get_observation()
+        info = {}  # Add an empty dictionary for compatibility
+        return obs, info
 
     def step(self, actions):
         """Take a step in the environment."""
@@ -62,7 +69,7 @@ class PPOEnv(gym.Env):
             self.cca_positions[i] += movement_vector.astype(int)
             self.cca_positions[i] = np.clip(self.cca_positions[i], 0, self.grid_size - 1)
 
-            # Update history
+            # Update CCA history
             self.cca_history[i] = np.roll(self.cca_history[i], shift=-1, axis=0)
             self.cca_history[i][-1] = self.cca_positions[i]
 
@@ -70,6 +77,7 @@ class PPOEnv(gym.Env):
         self.foxtrot_position = foxtrot_movement_fn_cube(self.foxtrot_position, self.cube_state)
         self.foxtrot_position = np.clip(self.foxtrot_position, 0, self.grid_size - 1)
 
+        # Update Foxtrot history
         self.foxtrot_history = np.roll(self.foxtrot_history, shift=-1, axis=0)
         self.foxtrot_history[-1] = self.foxtrot_position
 
@@ -77,9 +85,12 @@ class PPOEnv(gym.Env):
         reward = self._calculate_reward()
 
         # Check if any CCA overlaps Foxtrot
-        done = any(np.array_equal(pos, self.foxtrot_position) for pos in self.cca_positions)
+        terminated = any(np.array_equal(pos, self.foxtrot_position) for pos in self.cca_positions)
 
-        return self._get_observation(), reward, done, {}
+        # Define truncated as False for now (no time limit)
+        truncated = False
+
+        return self._get_observation(), reward, terminated, truncated, {}
 
     def _get_observation(self):
         """Return the current state as a flat array."""
@@ -96,7 +107,7 @@ class PPOEnv(gym.Env):
     def _calculate_reward(self):
         """Calculate the reward based on the distance to Foxtrot with aggressive scaling."""
         reward = 0
-        alpha = 50  # Reward for reducing distance
+        alpha = 500  # Reward for reducing distance
         beta = 0.5  # Penalty for being far away
 
         for i, pos in enumerate(self.cca_positions):
@@ -141,7 +152,7 @@ if __name__ == "__main__":
     vec_env = DummyVecEnv([lambda: env])
     policy_kwargs = dict(
         features_extractor_class=Transformer,
-        features_extractor_kwargs=dict(embed_dim=90, num_heads=5, ff_hidden=256, num_layers=7, seq_len=6),
+        features_extractor_kwargs=dict(embed_dim=90, num_heads=6, ff_hidden=256, num_layers=5, seq_len=6),
         #net_arch=[128, 256, 128, 64],  # Optional feedforward layers after transformer - can be specified for output to action and (future) value estimation
     )
 
@@ -154,12 +165,12 @@ if __name__ == "__main__":
         use_sde = False, # Essentially reducing delta of actions when rewards are very positive
         #sde_sample_freq = 3,
         learning_rate=linear_schedule(initial_value= 0.003),
-        n_steps=1000, # 2x the episode length which automatically terminates
+        n_steps=10000, # Epsiode Length in the simulation
         batch_size=500,
         gamma=0.9,
         gae_lambda= 0.95,
-        clip_range=0.8, #Clips larger updates to remain within +- 20%
-        ent_coef=0.05,
+        clip_range=0.2, #Clips larger updates to remain within +- 20%
+        #ent_coef=0.05,
         #tensorboard_log="./Patrol&Protect_PPO/ppo_patrol_tensorboard/"
     )
 

@@ -26,19 +26,19 @@ class ShowcaseSimulation:
 
     def run_simulation(self):
         """Run the simulation and collect positions for visualization."""
-        obs = self.env.reset()
+        obs, _ = self.env.reset()  # Handle the tuple returned by reset()
         for _ in range(self.steps):
             # Get the action from the trained model
-            action, _ = self.model.predict(obs)
+            action, _ = self.model.predict(obs)  # obs is now a NumPy array
 
             # Pass action directly to the step method
-            obs, reward, done, info = self.env.step(action)
+            obs, reward, done, truncated, info = self.env.step(action)  # Updated for Gymnasium API
 
             # Store positions for visualization
             self.cca_positions.append(np.array([np.array(pos) for pos in self.env.cca_positions], dtype=float))
             self.foxtrot_positions.append(np.array(self.env.foxtrot_position, dtype=float))
 
-            if done:
+            if done or truncated:  # End loop if the episode is over
                 break
 
     def visualize(self):
