@@ -28,13 +28,15 @@ class ShowcaseSimulation:
         """Run the simulation and collect positions for visualization."""
         obs = self.env.reset()
         for _ in range(self.steps):
+            # Get the action from the trained model
             action, _ = self.model.predict(obs)
-            obs, reward, done, info = self.env.step([action])
 
-            # Store positions as proper 2D arrays
-            self.cca_positions.append(np.array(self.env.cca_positions, dtype=float))
+            # Pass action directly to the step method
+            obs, reward, done, info = self.env.step(action)
+
+            # Store positions for visualization
+            self.cca_positions.append(np.array([np.array(pos) for pos in self.env.cca_positions], dtype=float))
             self.foxtrot_positions.append(np.array(self.env.foxtrot_position, dtype=float))
-
 
             if done:
                 break

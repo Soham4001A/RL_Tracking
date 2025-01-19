@@ -1,7 +1,10 @@
 import numpy as np
+import torch
+import torch.nn as nn
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 from matplotlib.animation import FuncAnimation
+from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 
 # Internal Module Imports
 from globals import *
@@ -11,6 +14,7 @@ class BaseObject:
     def __init__(self, name, initial_position, color='blue'):
         self.name = name
         self.position = np.array(initial_position)
+        self.prev_position = np.array(initial_position)
         self.path = []
         self.color = color
 
@@ -128,4 +132,119 @@ def foxtrot_movement_fn(position):
             new_position[i] = grid_size - (new_position[i] - grid_size)  # Reflect back from upper edge
 
     return new_position
+
+
+def foxtrot_movement_fn_cube(position, cube_state):
+    """
+    Movement function for Foxtrot to follow a 3D cube pattern.
+
+    Parameters:
+        position (np.array): Current position of Foxtrot.
+        cube_state (dict): Maintains state for the cube traversal, including current edge and progress.
+
+    Returns:
+        new_position (np.array): Updated position of Foxtrot.
+    """
+    side_length = 200  # Length of each side of the cube
+    half_side = side_length // 2
+    center = np.array([250, 250, 250])  # Center of the cube (adjusted for grid_size=500)
+
+    # Cube vertices
+    cube_vertices = [
+        center + np.array([half_side, half_side, half_side]),
+        center + np.array([-half_side, half_side, half_side]),
+        center + np.array([-half_side, -half_side, half_side]),
+        center + np.array([half_side, -half_side, half_side]),
+        center + np.array([half_side, -half_side, -half_side]),
+        center + np.array([half_side, half_side, -half_side]),
+        center + np.array([-half_side, half_side, -half_side]),
+        center + np.array([-half_side, -half_side, -half_side]),
+    ]
+
+    # Cube edges
+    edges = [
+        (0, 1), (1, 2), (2, 3), (3, 0),  # Top face
+        (4, 5), (5, 6), (6, 7), (7, 4),  # Bottom face
+        (0, 5), (1, 6), (2, 7), (3, 4)   # Vertical edges
+    ]
+
+    # Initialize cube state if not already
+    if "current_edge" not in cube_state or "progress" not in cube_state:
+        cube_state["current_edge"] = 0
+        cube_state["progress"] = 0
+
+    # Get the current edge and its vertices
+    edge_index = cube_state["current_edge"]
+    edge_start, edge_end = edges[edge_index]
+    edge_progress = cube_state["progress"] / side_length
+
+    # Interpolate position along the current edge
+    new_position = (1 - edge_progress) * cube_vertices[edge_start] + edge_progress * cube_vertices[edge_end]
+
+    # Update progress and edge
+    cube_state["progress"] += 10  # Step size along the edge
+    if cube_state["progress"] >= side_length:
+        cube_state["progress"] = 0  # Reset progress
+        cube_state["current_edge"] = (cube_state["current_edge"] + 1) % len(edges)  # Move to the next edge
+
+    # Return the new position as an integer
+    return np.round(new_position).astype(int)
+
+class Transformer(BaseFeaturesExtractor):
+    def __init__(self, observation_space, embed_dim=64, num_heads=3, ff_hidden=128, num_layers=4, seq_len=6):
+        feature_dim = embed_dim * seq_len
+        super(Transformer, self).__init__(
+            observation_space, features_dim=feature_dim
+        )
+        self.embed_dim = embed_dim
+        self.input_dim = observation_space.shape[0]
+        self.seq_len = seq_len  # Define seq_len explicitly
+        
+        # Validate that seq_len and embed_dim are compatible
+        if self.input_dim % seq_len != 0:
+            raise ValueError("Input dimension must be divisible by seq_len.")
+        
+        # Linear projection for input embedding
+        self.input_embedding = nn.Linear(self.input_dim // seq_len, embed_dim)
+        
+        # Transformer encoder layers
+        self.encoder_layer = nn.TransformerEncoderLayer(
+            d_model=embed_dim, 
+            nhead=num_heads, 
+            dim_feedforward=ff_hidden, 
+            batch_first=True
+        )
+        self.transformer = nn.TransformerEncoder(self.encoder_layer, num_layers=num_layers)
+        
+        # Flatten final output
+        self.flatten = nn.Flatten()
     
+    def forward(self, x):
+        # Reshape input into (batch_size, seq_len, features_per_seq)
+        batch_size = x.shape[0]
+        features_per_seq = self.input_dim // self.seq_len
+        x = x.view(batch_size, self.seq_len, features_per_seq)
+        
+        # Project input to embedding space
+        x = self.input_embedding(x)
+        
+        # Add positional encoding (optional)
+        batch_size, seq_len, embed_dim = x.shape
+        x = x + self._positional_encoding(seq_len, embed_dim).to(x.device)
+        
+        # Pass through transformer
+        x = self.transformer(x)
+        
+        # Flatten output
+        return self.flatten(x)
+    
+    def _positional_encoding(self, seq_len, embed_dim):
+        """
+        Generate positional encoding.
+        """
+        position = torch.arange(0, seq_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, embed_dim, 2).float() * (-np.log(10000.0) / embed_dim))
+        pe = torch.zeros(seq_len, embed_dim)
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        return pe
