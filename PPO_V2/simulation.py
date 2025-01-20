@@ -50,10 +50,46 @@ class PPOEnv(gym.Env):
         """Reset the environment to the initial state."""
         super().reset(seed=seed)  # Properly seed the environment
 
-        self.cca_positions = [np.array([100, 100, 100]) for _ in range(self.num_cca)]
-        self.foxtrot_position = np.array([200, 200, 200])
+        # Randomize CCA positions and reset history
+        self.cca_positions = [
+            np.random.randint(0, self.grid_size, size=3) for _ in range(self.num_cca)
+        ]
         self.cca_history = [np.tile(pos, (6, 1)) for pos in self.cca_positions]
-        self.foxtrot_history = np.tile(self.foxtrot_position, (6, 1))  # Reset Foxtrot history
+
+        # Randomize Foxtrot position on the cube path
+        side_length = 200  # Length of each cube edge
+        half_side = side_length // 2
+        center = np.array([250, 250, 250])  # Center of the cube
+        cube_vertices = [
+            center + np.array([half_side, half_side, half_side]),
+            center + np.array([-half_side, half_side, half_side]),
+            center + np.array([-half_side, -half_side, half_side]),
+            center + np.array([half_side, -half_side, half_side]),
+            center + np.array([half_side, -half_side, -half_side]),
+            center + np.array([half_side, half_side, -half_side]),
+            center + np.array([-half_side, half_side, -half_side]),
+            center + np.array([-half_side, -half_side, -half_side]),
+        ]
+        edges = [
+            (0, 1), (1, 2), (2, 3), (3, 0),  # Top face
+            (4, 5), (5, 6), (6, 7), (7, 4),  # Bottom face
+            (0, 5), (1, 6), (2, 7), (3, 4)   # Vertical edges
+        ]
+
+        # Randomly select an edge and a point along the edge
+        random_edge_index = np.random.choice(len(edges))
+        edge_start, edge_end = edges[random_edge_index]
+        random_progress = np.random.uniform(0, 1)  # Random progress along the edge
+        self.foxtrot_position = (1 - random_progress) * cube_vertices[edge_start] + random_progress * cube_vertices[edge_end]
+        self.foxtrot_position = np.round(self.foxtrot_position).astype(int)
+
+        # Reset Foxtrot history
+        self.foxtrot_history = np.tile(self.foxtrot_position, (6, 1))
+
+        if POSITIONAL_DEBUG:
+            print(f"Foxtrot spawned at {self.foxtrot_position}")
+            for i, pos in enumerate(self.cca_positions):
+                print(f"CCA {i} spawned at {pos}")
 
         obs = self._get_observation()
         info = {}  # Add an empty dictionary for compatibility
@@ -171,7 +207,7 @@ if __name__ == "__main__":
     policy_kwargs = dict(
         features_extractor_class=Transformer,
         features_extractor_kwargs=dict(embed_dim=90, num_heads=6, ff_hidden=256, num_layers=5, seq_len=6),
-        #net_arch=[128, 256, 128, 64],  # Optional feedforward layers after transformer - can be specified for output to action and (future) value estimation
+        net_arch = [dict(vf=[128,256,256,64])] #use keyword (pi) for policy network architecture -> additional ffn for decoding output, (vf) for reward func
     )
 
     model = PPO(
@@ -182,7 +218,7 @@ if __name__ == "__main__":
         #normalize_advantage = True,
         use_sde = False, # Essentially reducing delta of actions when rewards are very positive
         #sde_sample_freq = 3,
-        learning_rate=linear_schedule(initial_value= 0.003),
+        learning_rate=linear_schedule(initial_value= 0.005),
         n_steps=10000, # Epsiode Length in the simulation
         batch_size=500,
         gamma=0.9,
@@ -193,7 +229,7 @@ if __name__ == "__main__":
     )
 
     # Train the model
-    model.learn(total_timesteps=100_000)
+    model.learn(total_timesteps=500_000)
 
     # Save the model
     model.save("./PPO_V2/Trained_Model")

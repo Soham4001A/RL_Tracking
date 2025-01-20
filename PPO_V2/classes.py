@@ -136,59 +136,86 @@ def foxtrot_movement_fn(position):
 
 def foxtrot_movement_fn_cube(position, cube_state):
     """
-    Movement function for Foxtrot to follow a 3D cube pattern.
+    Movement function for Foxtrot to alternate between rectangle movement in x/y
+    and pure z-axis movement to a random z-coordinate.
 
     Parameters:
         position (np.array): Current position of Foxtrot.
-        cube_state (dict): Maintains state for the cube traversal, including current edge and progress.
+        cube_state (dict): Maintains state for the traversal, including phase and targets.
 
     Returns:
         new_position (np.array): Updated position of Foxtrot.
     """
-    side_length = 200  # Length of each side of the cube
-    half_side = side_length // 2
-    center = np.array([250, 250, 250])  # Center of the cube (adjusted for grid_size=500)
-
-    # Cube vertices
-    cube_vertices = [
-        center + np.array([half_side, half_side, half_side]),
-        center + np.array([-half_side, half_side, half_side]),
-        center + np.array([-half_side, -half_side, half_side]),
-        center + np.array([half_side, -half_side, half_side]),
-        center + np.array([half_side, -half_side, -half_side]),
-        center + np.array([half_side, half_side, -half_side]),
-        center + np.array([-half_side, half_side, -half_side]),
-        center + np.array([-half_side, -half_side, -half_side]),
-    ]
-
-    # Cube edges
-    edges = [
-        (0, 1), (1, 2), (2, 3), (3, 0),  # Top face
-        (4, 5), (5, 6), (6, 7), (7, 4),  # Bottom face
-        (0, 5), (1, 6), (2, 7), (3, 4)   # Vertical edges
-    ]
+    step_size = 10  # Step size for movement
+    grid_size = 500  # Boundary of the grid
 
     # Initialize cube state if not already
-    if "current_edge" not in cube_state or "progress" not in cube_state:
-        cube_state["current_edge"] = 0
-        cube_state["progress"] = 0
+    if "phase" not in cube_state:
+        cube_state["phase"] = "rectangle"
+        cube_state["rectangle"] = {
+            "vertices": None,
+            "current_index": 0,
+            "steps_completed": 0,
+        }
+        cube_state["target_z"] = None
 
-    # Get the current edge and its vertices
-    edge_index = cube_state["current_edge"]
-    edge_start, edge_end = edges[edge_index]
-    edge_progress = cube_state["progress"] / side_length
+    # Phase 1: Rectangle Movement in x/y
+    if cube_state["phase"] == "rectangle":
+        rectangle = cube_state["rectangle"]
 
-    # Interpolate position along the current edge
-    new_position = (1 - edge_progress) * cube_vertices[edge_start] + edge_progress * cube_vertices[edge_end]
+        # If rectangle is not initialized, create one with random length/width
+        if rectangle["vertices"] is None:
+            length = np.random.randint(50, 200)  # Random length
+            width = np.random.randint(50, 200)  # Random width
+            center = position[:2]  # Use current x, y as the center
+            rectangle["vertices"] = [
+                center + np.array([length / 2, width / 2]),
+                center + np.array([-length / 2, width / 2]),
+                center + np.array([-length / 2, -width / 2]),
+                center + np.array([length / 2, -width / 2]),
+            ]
+            rectangle["current_index"] = 0
+            rectangle["steps_completed"] = 0
 
-    # Update progress and edge
-    cube_state["progress"] += 10  # Step size along the edge
-    if cube_state["progress"] >= side_length:
-        cube_state["progress"] = 0  # Reset progress
-        cube_state["current_edge"] = (cube_state["current_edge"] + 1) % len(edges)  # Move to the next edge
+        # Move along the rectangle vertices
+        target_vertex = rectangle["vertices"][rectangle["current_index"]]
+        direction = target_vertex - position[:2]
+        distance = np.linalg.norm(direction)
 
-    # Return the new position as an integer
-    return np.round(new_position).astype(int)
+        if distance <= step_size:
+            # If close to the target vertex, move to it and switch to the next vertex
+            position[:2] = target_vertex
+            rectangle["current_index"] = (rectangle["current_index"] + 1) % len(rectangle["vertices"])
+        else:
+            # Move toward the target vertex
+            direction = direction / distance  # Normalize
+            position[:2] += (direction * step_size).astype(int)  # Explicitly cast to int
+
+        rectangle["steps_completed"] += 1
+
+        # After completing a full rectangle, switch to z-axis movement
+        if rectangle["current_index"] == 0 and rectangle["steps_completed"] > 4:
+            cube_state["phase"] = "z_movement"
+            cube_state["target_z"] = np.random.randint(0, grid_size)  # Random target z
+
+    # Phase 2: Pure z-axis Movement
+    elif cube_state["phase"] == "z_movement":
+        target_z = cube_state["target_z"]
+        direction = target_z - position[2]
+
+        if abs(direction) <= step_size:
+            # If close to the target z, move to it and switch back to rectangle movement
+            position[2] = target_z
+            cube_state["phase"] = "rectangle"
+            cube_state["rectangle"] = {"vertices": None, "current_index": 0, "steps_completed": 0}
+        else:
+            # Move along the z-axis
+            position[2] += int(np.sign(direction) * step_size)  # Explicitly cast to int
+
+    # Ensure position stays within grid boundaries
+    position = np.clip(position, 0, grid_size)
+
+    return np.round(position).astype(int)
 
 class Transformer(BaseFeaturesExtractor):
     def __init__(self, observation_space, embed_dim=64, num_heads=3, ff_hidden=128, num_layers=4, seq_len=6):
