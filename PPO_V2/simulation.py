@@ -2,17 +2,25 @@ import gymnasium as gym
 from gymnasium import spaces
 from gymnasium.spaces import Box
 import numpy as np
+from math import pow
 from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import DummyVecEnv
 
 # Internal Module Imports
 from classes import *
-from globals import *
+from globals import (
+    grid_size,
+    num_cca,
+    step_size,
+    STATIONARY_FOXTROT,
+    RECTANGULAR_FOXTROT,
+    COMPLEX_REWARD, 
+    BASIC_REWARD
+)
 
 DEBUG = True
 REWARD_DEBUG = True
 POSITIONAL_DEBUG = False
-REWARD_BASIC = False
 
 class PPOEnv(gym.Env):
     """Custom PPO Environment for controlling CCA objects."""
@@ -21,7 +29,7 @@ class PPOEnv(gym.Env):
         self.grid_size = grid_size
         self.num_cca = num_cca
         self.current_step = 0
-        self.max_steps = 10_000
+        self.max_steps = 10_000 # Epsiode Length in the simulation
         self.cube_state = {}
 
         # Action space: Continuous movement in 3D space
@@ -37,10 +45,9 @@ class PPOEnv(gym.Env):
             dtype=np.float32
         )
 
-        # Initialize positions
-        # Initialize positions and history
+        # Initialize positions (randomized in the reset function)
         self.cca_positions = [np.array([100, 100, 100]) for _ in range(num_cca)]
-        self.foxtrot_position = np.array([200, 200, 200])
+        self.foxtrot_position = np.random.randint(0, self.grid_size, size=3)
 
         # Initialize history for last 5 positions
         self.cca_history = [np.tile(pos, (6, 1)) for pos in self.cca_positions]
@@ -50,6 +57,9 @@ class PPOEnv(gym.Env):
         """Reset the environment to the initial state."""
         super().reset(seed=seed)  # Properly seed the environment
 
+        self.cube_state = {}
+        self.current_step = 0
+        
         # Randomize CCA positions and reset history
         self.cca_positions = [
             np.random.randint(0, self.grid_size, size=3) for _ in range(self.num_cca)
@@ -76,12 +86,16 @@ class PPOEnv(gym.Env):
             (0, 5), (1, 6), (2, 7), (3, 4)   # Vertical edges
         ]
 
-        # Randomly select an edge and a point along the edge
-        random_edge_index = np.random.choice(len(edges))
-        edge_start, edge_end = edges[random_edge_index]
-        random_progress = np.random.uniform(0, 1)  # Random progress along the edge
-        self.foxtrot_position = (1 - random_progress) * cube_vertices[edge_start] + random_progress * cube_vertices[edge_end]
-        self.foxtrot_position = np.round(self.foxtrot_position).astype(int)
+        if RECTANGULAR_FOXTROT:
+            # Randomly select an edge and a point along the edge
+            random_edge_index = np.random.choice(len(edges))
+            edge_start, edge_end = edges[random_edge_index]
+            random_progress = np.random.uniform(0, 1)  # Random progress along the edge
+            self.foxtrot_position = (1 - random_progress) * cube_vertices[edge_start] + random_progress * cube_vertices[edge_end]
+            self.foxtrot_position = np.round(self.foxtrot_position).astype(int)
+
+        if STATIONARY_FOXTROT:
+            self.foxtrot_position = np.random.randint(0, self.grid_size, size=3)
 
         # Reset Foxtrot history
         self.foxtrot_history = np.tile(self.foxtrot_position, (6, 1))
@@ -96,14 +110,21 @@ class PPOEnv(gym.Env):
         return obs, info
 
     def step(self, actions):
-        """Take a step in the environment."""
+        # Convert actions to a NumPy array in case it's not already
+        actions = np.array(actions, dtype=np.float32)
 
-        # Ensure actions is iterable
-        if not isinstance(actions, (list, tuple, np.ndarray)):
-            actions = [actions]
+        # If the shape is (num_cca * 3,), reshape to (num_cca, 3)
+        # This ensures we handle both the single- and multi-CCA cases correctly
+        if actions.ndim == 1 and actions.size == self.num_cca * 3:
+            actions = actions.reshape(self.num_cca, 3)
+        elif actions.ndim == 2:
+            # Already shaped (num_cca, 3); no change needed
+            pass
+        else:
+            raise ValueError(f"Unexpected action shape: {actions.shape}")
 
-        # Update CCA positions and history
-        for i, action in enumerate(actions[:self.num_cca]):
+        # Now 'actions' has shape (num_cca, 3), so your loop works as intended
+        for i, action in enumerate(actions):
             movement_vector = self._decode_action(action)
             self.cca_positions[i] += movement_vector.astype(int)
             self.cca_positions[i] = np.clip(self.cca_positions[i], 0, self.grid_size - 1)
@@ -113,7 +134,12 @@ class PPOEnv(gym.Env):
             self.cca_history[i][-1] = self.cca_positions[i]
 
         # Update Foxtrot position and history
-        self.foxtrot_position = foxtrot_movement_fn_cube(self.foxtrot_position, self.cube_state)
+        if STATIONARY_FOXTROT:
+            self.foxtrot_position = np.random.randint(0, self.grid_size, size=3)
+            
+        elif RECTANGULAR_FOXTROT:
+            self.foxtrot_position = foxtrot_movement_fn_cube(self.foxtrot_position, self.cube_state)
+        
         self.foxtrot_position = np.clip(self.foxtrot_position, 0, self.grid_size - 1)
 
         # Update Foxtrot history
@@ -123,14 +149,22 @@ class PPOEnv(gym.Env):
         # Calculate reward
         reward = self._calculate_reward()
 
-        # End Condition Check
+        # Check success condition for ANY of the CCAs:
+        done_success = False
+        for i, pos in enumerate(self.cca_positions):
+            distance = np.linalg.norm(pos - self.foxtrot_position)
+            if distance < 5.0:  # same capture_radius
+                done_success = True
+                break
+
+        # Time-limit done
         self.current_step += 1
+        truncated = (self.current_step >= self.max_steps)
 
-        truncated = self.current_step >= self.max_steps # Hard stop end 
-
-        # Define terminated as false since we do not have a natural end point
-        terminated = False
-    
+        # If agent succeeded, terminate the episode
+        terminated = done_success  # or keep it False if you want continuing episodes
+        
+        # Return standard Gymnasium step
         return self._get_observation(), reward, terminated, truncated, {}
 
     def _get_observation(self):
@@ -146,49 +180,53 @@ class PPOEnv(gym.Env):
         return np.clip(action, -step_size, step_size)
 
     def _calculate_reward(self):
-        """Calculate the reward based on the distance to Foxtrot with aggressive scaling."""
-        reward = 0
-        alpha = 500  # Reward for reducing distance
-        beta = 0.9  # Penalty for being far away
+        """
+        Calculate reward based on the current reward flag settings.
+        """
+        if COMPLEX_REWARD:
+            # Complex reward logic
+            reward = 0.0
+            alpha = 300.0
+            beta = 0.2
+            capture_bonus = 1000.0
+            capture_radius = 5.0
+            alpha_capture_radius = 50
+            beta_capture_radius = 150
 
-        for i, pos in enumerate(self.cca_positions):
-            distance = np.linalg.norm(pos - self.foxtrot_position)
-            prev_distance = np.linalg.norm(self.cca_history[i][-2] - self.foxtrot_position)
-
-            # Quadratic penalty for large distances, amplified for close ranges
-            reward += 1000 / (1 + distance ** 2)
-
-            # Reward for reducing the distance
-            reward += alpha * (prev_distance - distance)
-
-            # Penalty for staying far away
-            reward -= beta * distance
-
-            # Strong penalty for overlapping with Foxtrot
-            if np.array_equal(pos, self.foxtrot_position):
-                reward -= 500
-
-        # Ensure the reward is within a reasonable range for stability
-        reward = np.clip(reward, -1000, 1000)
-
-        if REWARD_DEBUG:
-            print(f"Reward is {reward}")
-
-        return reward
-    
-    if REWARD_BASIC:
-        def _calculate_reward(self):
-            """Calculate the reward based on the distance to Foxtrot with aggressive scaling."""
-            reward = 0
-            
             for i, pos in enumerate(self.cca_positions):
                 distance = np.linalg.norm(pos - self.foxtrot_position)
-                reward = -distance/10
+                prev_distance = np.linalg.norm(self.cca_history[i][-2] - self.foxtrot_position)
+                improvement = (prev_distance - distance) / prev_distance if prev_distance > 0 else 0
+                reward += alpha * improvement
+                reward -= beta * distance
+                if distance < capture_radius:
+                    reward += capture_bonus
+                if distance < alpha_capture_radius:
+                    reward += 500
+                if distance < beta_capture_radius:
+                    reward += 30
+
+            reward = np.clip(reward, -5000, 5000)
 
             if REWARD_DEBUG:
-                print(f"Reward is {reward}")
+                print(f"Complex Reward: {reward}")
 
             return reward
+
+        elif BASIC_REWARD:
+            # Basic reward logic
+            reward = 0
+            for i, pos in enumerate(self.cca_positions):
+                distance = np.linalg.norm(pos - self.foxtrot_position)
+                reward -= distance / 10
+
+            if REWARD_DEBUG:
+                print(f"Basic Reward is {reward}")
+
+            return reward
+
+        else:
+            raise ValueError("No reward flag set! Set COMPLEX_REWARD or BASIC_REWARD to True.")
 
 if __name__ == "__main__":
 
@@ -206,8 +244,8 @@ if __name__ == "__main__":
     vec_env = DummyVecEnv([lambda: env])
     policy_kwargs = dict(
         features_extractor_class=Transformer,
-        features_extractor_kwargs=dict(embed_dim=90, num_heads=6, ff_hidden=256, num_layers=5, seq_len=6),
-        net_arch = [dict(vf=[128,256,256,64])] #use keyword (pi) for policy network architecture -> additional ffn for decoding output, (vf) for reward func
+        features_extractor_kwargs=dict(embed_dim=90, num_heads=6, ff_hidden=256, num_layers=8, seq_len=6),
+        net_arch = dict(vf=[128,256,256,64]) #use keyword (pi) for policy network architecture -> additional ffn for decoding output, (vf) for reward func
     )
 
     model = PPO(
@@ -215,21 +253,36 @@ if __name__ == "__main__":
         policy_kwargs=policy_kwargs,
         env=vec_env,
         verbose=1,
-        #normalize_advantage = True,
+        normalize_advantage = True,
         use_sde = False, # Essentially reducing delta of actions when rewards are very positive
         #sde_sample_freq = 3,
-        learning_rate=linear_schedule(initial_value= 0.005),
-        n_steps=10000, # Epsiode Length in the simulation
-        batch_size=500,
+        learning_rate=linear_schedule(initial_value= 0.0002),
+        n_steps=3000, # Steps per learning update
+        batch_size=300,
         gamma=0.9,
-        gae_lambda= 0.95,
-        clip_range=0.2, #Clips larger updates to remain within +- 20%
+        gae_lambda= 0.35,
+        vf_coef = 0.8,
+        clip_range=0.8, # Clips larger updates to remain within +- 20%
         #ent_coef=0.05,
-        #tensorboard_log="./Patrol&Protect_PPO/ppo_patrol_tensorboard/"
+        #tensorboard_log="./Patrol&Proetect_PPO/ppo_patrol_tensorboard/"
     )
 
-    # Train the model
-    model.learn(total_timesteps=500_000)
+    # Cirriculum Learning
+
+    # Train the model with stationary foxtrot (maybe add small gridsize too)
+    STATIONARY_FOXTROT = True
+    COMPLEX_REWARD = True
+    RECTANGULAR_FOXTROT = False
+    BASIC_REWARD = False
+    model.learn(total_timesteps=100_000)
+ 
+    #STATIONARY_FOXTROT = False
+    #BASIC_REWARD = False
+    #RECTANGULAR_FOXTROT = True
+    #COMPLEX_REWARD = True
+    # Train the model with moving foxtrot
+    #model.learn(total_timesteps=300_000)
+
 
     # Save the model
     model.save("./PPO_V2/Trained_Model")

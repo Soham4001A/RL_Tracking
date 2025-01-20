@@ -1,13 +1,16 @@
 " HERE WE GOOOOO "
 
-
+EXPANSION TO MULTIDISCRETE -->
 1. Ensure that when expanding CCA's - we have correct input shaping -> see o1 suggestion
 2. Ensure that when expanding CCA's - Move to MultiDiscrete
 
+PATH FIXING -->
+1. Fix Path for Foxtrot -> Kinda Working {1/19/2025}
+2. Add random location spawing for CCA's to train -> Done {1/19/2025}
+3. Add random location spawing for Foxtrot to train -> Done {1/19/2025}
+4. Add random route function picker for Foxtrot at the start of training every episode
 
-3. Fix Path for Foxtrot -> Not Really Working {1/19/2025}
-4. Add random location spawing for CCA's to train -> Done {1/19/2025}
-5. Add random location spawing for Foxtrot to train -> Done {1/19/2025}
+PATROL & PROTECT OBJECTIVE -->
+1. Start with basic third object tracking & interception
 
-
-6. Add random route function picker for Foxtrot at the start of training every episode
+Random location isn't training but setting it to a single point is working with complex reward
