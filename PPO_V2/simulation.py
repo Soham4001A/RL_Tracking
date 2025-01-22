@@ -157,7 +157,7 @@ class PPOEnv(gym.Env):
 
         # Update Foxtrot position and history
             
-        if RECTANGULAR_FOXTROT:
+        if globals.RECTANGULAR_FOXTROT:
             self.foxtrot_position = foxtrot_movement_fn_cube(self.foxtrot_position, self.cube_state)
             self.foxtrot_position = np.clip(self.foxtrot_position, 0, self.grid_size - 1)
 
@@ -280,7 +280,7 @@ if __name__ == "__main__":
     globals.STATIONARY_FOXTROT = True
     globals.RECTANGULAR_FOXTROT = False
     globals.COMPLEX_REWARD = True 
-    globals.RAND_POS = False #This is for foxtrot & TODO: should be rewritten as so
+    globals.RAND_POS = False #This is for stationary foxtrot & TODO: should be rewritten as so
     globals.FIXED_POS = True
     globals.RAND_FIXED_CCA = True
 
@@ -315,6 +315,7 @@ if __name__ == "__main__":
 
     # Cirriculum Learning
 
+
     # Train the model with stationary foxtrot and small random CCA
     globals.STATIONARY_FOXTROT = True
     globals.RECTANGULAR_FOXTROT = False
@@ -331,7 +332,7 @@ if __name__ == "__main__":
     globals.RAND_POS = False
     globals.FIXED_POS = True
     globals.RAND_FIXED_CCA = False
-    model.learn(total_timesteps=200_000)
+    model.learn(total_timesteps=140_000)
 
     # Continue with random stationary foxtrot and random spawn CCA (maybed small gridsize too)
     globals.STATIONARY_FOXTROT = True
@@ -340,16 +341,20 @@ if __name__ == "__main__":
     globals.FIXED_POS = False
     globals.RAND_POS = True
     globals.RAND_FIXED_CCA = False
-    model.learn(total_timesteps=600_000)
+    model.learn(total_timesteps=350_000)
+
+    """
  
+    
     # Finally, train it to follow a movement function
     globals.STATIONARY_FOXTROT = False
     globals.RECTANGULAR_FOXTROT = True
     globals.COMPLEX_REWARD = True
-    globals.RAND_POS = True
-    globals.FIXED_POS = False
     globals.RAND_FIXED_CCA = False
     model.learn(total_timesteps=900_000)
+
+
+    """
 
 
     # Save the model
