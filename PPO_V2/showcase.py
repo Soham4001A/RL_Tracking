@@ -101,12 +101,14 @@ if __name__ == "__main__":
     # ----------------------
     # TOGGLE FOXTROT MODES HERE
     # ----------------------
-    globals.STATIONARY_FOXTROT = True
-    globals.COMPLEX_REWARD = True
-    globals.RECTANGULAR_FOXTROT = False
     globals.BASIC_REWARD = False
+    globals.COMPLEX_REWARD = True
+
+
+    globals.STATIONARY_FOXTROT = False
     globals.RAND_POS = True
     globals.FIXED_POS = False
+    globals.RECTANGULAR_FOXTROT = True
     globals.RAND_FIXED_CCA = False
 
     # Initialize environment with the updated flags

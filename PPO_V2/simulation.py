@@ -314,48 +314,38 @@ if __name__ == "__main__":
     )
 
     # Cirriculum Learning
+    globals.COMPLEX_REWARD = True 
 
 
     # Train the model with stationary foxtrot and small random CCA
-    globals.STATIONARY_FOXTROT = True
     globals.RECTANGULAR_FOXTROT = False
-    globals.COMPLEX_REWARD = True 
-    globals.RAND_POS = False #This is for foxtrot & TODO: should be rewritten as so
-    globals.FIXED_POS = True
+    globals.STATIONARY_FOXTROT = True
+    globals.RAND_POS = False #This is for stationary foxtrot & TODO: should be rewritten as so
+    globals.FIXED_POS = True #This is for stationary foxtrot & TODO: should be rewritten as so
     globals.RAND_FIXED_CCA = True
     model.learn(total_timesteps=70_000)
 
     # Continutation but now CCA's are random spawn farther away
-    globals.STATIONARY_FOXTROT = True
-    globals.COMPLEX_REWARD = True
     globals.RECTANGULAR_FOXTROT = False
-    globals.RAND_POS = False
-    globals.FIXED_POS = True
+    globals.STATIONARY_FOXTROT = True
+    globals.RAND_POS = False #This is for stationary foxtrot & TODO: should be rewritten as so
+    globals.FIXED_POS = True #This is for stationary foxtrot & TODO: should be rewritten as so
     globals.RAND_FIXED_CCA = False
     model.learn(total_timesteps=140_000)
 
     # Continue with random stationary foxtrot and random spawn CCA (maybed small gridsize too)
-    globals.STATIONARY_FOXTROT = True
-    globals.COMPLEX_REWARD = True
     globals.RECTANGULAR_FOXTROT = False
-    globals.FIXED_POS = False
-    globals.RAND_POS = True
+    globals.STATIONARY_FOXTROT = True
+    globals.FIXED_POS = False #This is for stationary foxtrot & TODO: should be rewritten as so
+    globals.RAND_POS = True #This is for stationary foxtrot & TODO: should be rewritten as so
     globals.RAND_FIXED_CCA = False
-    model.learn(total_timesteps=350_000)
-
-    """
- 
+    model.learn(total_timesteps=350_000) 
     
     # Finally, train it to follow a movement function
     globals.STATIONARY_FOXTROT = False
     globals.RECTANGULAR_FOXTROT = True
-    globals.COMPLEX_REWARD = True
     globals.RAND_FIXED_CCA = False
-    model.learn(total_timesteps=900_000)
-
-
-    """
-
+    model.learn(total_timesteps=600_000)
 
     # Save the model
     model.save("./PPO_V2/Trained_Model")
