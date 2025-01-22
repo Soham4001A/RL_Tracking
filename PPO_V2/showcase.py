@@ -92,7 +92,7 @@ class ShowcaseSimulation:
             if frame == 1:  # Just so the legend is not repeated every frame
                 ax.legend()
 
-        anim = FuncAnimation(fig, update, frames=self.steps, interval=10)
+        anim = FuncAnimation(fig, update, frames=self.steps, interval=50)
         plt.show()
 
 

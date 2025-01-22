@@ -11,6 +11,7 @@ RECTANGULAR_FOXTROT = False
 FIXED_POS = False
 RAND_POS = False
 RAND_FIXED_CCA = False
+PROXIMITY_CCA = False
 
 
 #Function Flags

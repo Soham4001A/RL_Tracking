@@ -9,6 +9,8 @@ PATH FIXING -->
 PATROL & PROTECT OBJECTIVE -->
 1. Start with basic third object tracking & interception
 
+TERRAIN ON Z AXIS + OBJECT TRACKING -->
+1. Start with basic terrain with random spawn (CCA + stationary Foxtrot) & interception
 
 " One Day "
 

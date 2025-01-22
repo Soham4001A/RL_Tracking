@@ -53,6 +53,9 @@ class PPOEnv(gym.Env):
                 ) for _ in range(self.num_cca)
             ]
         
+        elif globals.PROXIMITY_CCA:
+            self.cca_positions = [self.foxtrot_position for _ in range(self.num_cca)]
+
         else:
             self.cca_positions = [
             np.random.randint(0, self.grid_size, size=3) for _ in range(self.num_cca)
@@ -68,20 +71,6 @@ class PPOEnv(gym.Env):
 
         self.cube_state = {}
         self.current_step = 0
-        
-        # Create CCA Positions
-        if globals.RAND_FIXED_CCA:
-            self.cca_positions = [
-                np.clip(
-                    self.foxtrot_position + np.random.randint(-spawn_range, spawn_range + 1, size=3),
-                    0, self.grid_size - 1
-                ) for _ in range(self.num_cca)
-            ]
-        
-        else:
-            self.cca_positions = [
-            np.random.randint(0, self.grid_size, size=3) for _ in range(self.num_cca)
-            ]
 
         self.cca_history = [np.tile(pos, (6, 1)) for pos in self.cca_positions]
 
@@ -118,6 +107,23 @@ class PPOEnv(gym.Env):
                 self.foxtrot_position = np.random.randint(200, 301, size=3)
             elif globals.FIXED_POS:
                 self.foxtrot_position = np.array([250,250,250])
+
+        # Create CCA Positions
+        if globals.RAND_FIXED_CCA:
+            self.cca_positions = [
+                np.clip(
+                    self.foxtrot_position + np.random.randint(-spawn_range, spawn_range + 1, size=3),
+                    0, self.grid_size - 1
+                ) for _ in range(self.num_cca)
+            ]
+        
+        elif globals.PROXIMITY_CCA:
+            self.cca_positions = [self.foxtrot_position for _ in range(self.num_cca)]
+
+        else:
+            self.cca_positions = [
+            np.random.randint(0, self.grid_size, size=3) for _ in range(self.num_cca)
+            ]
 
         # Reset Foxtrot history
         self.foxtrot_history = np.tile(self.foxtrot_position, (6, 1))
@@ -217,8 +223,9 @@ class PPOEnv(gym.Env):
             capture_bonus = 1000.0
             capture_radius = 3.0
             collision_radius = 1.0
-            alpha_capture_radius = 10
-            beta_capture_radius = 20  
+            alpha_capture_radius = 10 # 10
+            beta_capture_radius = 20  # 20
+            charlie_capture_radius = 50
 
             for i, pos in enumerate(self.cca_positions):
                 distances = [
@@ -236,9 +243,11 @@ class PPOEnv(gym.Env):
                 if distances[-1] < capture_radius:
                     reward += capture_bonus
                 elif distances[-1] < alpha_capture_radius:
-                    reward += 100
+                    reward += 300 #100
                 elif distances[-1] < beta_capture_radius:
-                    reward += 50
+                    reward += 100 #50
+                elif distances[-1] < charlie_capture_radius:
+                    reward += 10
                 
                 elif distances[-1] < collision_radius:
                     reward = -2000
@@ -246,7 +255,7 @@ class PPOEnv(gym.Env):
             reward = np.clip(reward, -2000, 2000)
 
             if REWARD_DEBUG:
-                print(f"Complex Reward: {reward}, Distance is {distances}")
+                print(f"Complex Reward: {reward}, Last Three Distances: {distances}")
 
             return reward
 
@@ -306,8 +315,8 @@ if __name__ == "__main__":
         n_steps=3000, # Steps per learning update
         batch_size=1000,
         gamma=0.9,
-        gae_lambda= 0.75,
-        vf_coef = 0.8,
+        gae_lambda= 0.85,
+        vf_coef = 0.5,
         clip_range=0.4, # Clips larger updates to remain within +- 60%
         #ent_coef=0.05,
         #tensorboard_log="./Patrol&Proetect_PPO/ppo_patrol_tensorboard/"
@@ -317,6 +326,7 @@ if __name__ == "__main__":
     globals.COMPLEX_REWARD = True 
 
 
+    """
     # Train the model with stationary foxtrot and small random CCA
     globals.RECTANGULAR_FOXTROT = False
     globals.STATIONARY_FOXTROT = True
@@ -341,10 +351,12 @@ if __name__ == "__main__":
     globals.RAND_FIXED_CCA = False
     model.learn(total_timesteps=350_000) 
     
-    # Finally, train it to follow a movement function
+    """
+    # Finally, train it to follow a movement function - spawn CCA's at same location as foxtrot initially
     globals.STATIONARY_FOXTROT = False
     globals.RECTANGULAR_FOXTROT = True
     globals.RAND_FIXED_CCA = False
+    globals.PROXIMITY_CCA = True
     model.learn(total_timesteps=600_000)
 
     # Save the model
