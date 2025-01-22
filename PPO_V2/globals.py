@@ -6,13 +6,13 @@ spawn_range = 20  # Adjust this range for initial curriculum
 
 
 # Cirriculum Learning
-STATIONARY_FOXTROT = True
+STATIONARY_FOXTROT = False
 RECTANGULAR_FOXTROT = False
-FIXED_POS = True
+FIXED_POS = False
 RAND_POS = False
-RAND_FIXED_CCA = True
+RAND_FIXED_CCA = False
 
 
 #Function Flags
-COMPLEX_REWARD = True
+COMPLEX_REWARD = False
 BASIC_REWARD = False

@@ -1,55 +1,51 @@
 from simulation import PPOEnv
 from classes import Transformer
-from globals import (
-    grid_size, 
-    num_cca, 
-    step_size, 
-    STATIONARY_FOXTROT, 
-    RECTANGULAR_FOXTROT,
-    COMPLEX_REWARD, 
-    BASIC_REWARD
-)
-
+import globals
 import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 from matplotlib.animation import FuncAnimation
 from stable_baselines3 import PPO
+from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
 # Visualization parameters
-NUM_CCA = num_cca
+NUM_CCA = globals.num_cca
 STEPS = 10000
 
 class ShowcaseSimulation:
-    def __init__(self, model_path, env, steps):
-        self.model = PPO.load(model_path)
-        self.env = env
+    def __init__(self, model_path, vec_env, steps):
+        self.model = PPO.load(model_path, env = vec_env)
+        self.env = vec_env
         self.steps = steps
         self.cca_positions = []
         self.foxtrot_positions = []
 
     def run_simulation(self):
         """Run the simulation and collect positions for visualization."""
-        obs, _ = self.env.reset()  # Handle the tuple returned by reset()
+        obs = self.env.reset()
 
         for _ in range(self.steps):
             # Get the action from the trained model
             action, _ = self.model.predict(obs)
 
             # Step the environment
-            obs, reward, done, truncated, info = self.env.step(action)
+            obs, reward, terminated, truncated = self.env.step(action)
 
             # Store positions for visualization
-            # (We copy them to float arrays to avoid referencing the same underlying data.)
             self.cca_positions.append(
-                np.array([np.array(pos) for pos in self.env.cca_positions], dtype=float)
+                np.array([np.array(pos) for pos in self.env.get_attr('cca_positions')[0]], dtype=float)
             )
             self.foxtrot_positions.append(
-                np.array(self.env.foxtrot_position, dtype=float)
+                np.array(self.env.get_attr('foxtrot_position')[0], dtype=float)
             )
 
-            if done or truncated:
-                break
+            terminated = truncated = False #This is wrong. It's happening because terminated is being set to done success at end of each training episode
+
+            if truncated:
+                print("Episode Truncated (Non-natural endpoint (hard-stopped))")
+            
+            if terminated:
+                print("Episode Terminated (Natural endpoint (Objective Achieved))")
 
     def visualize(self):
         """Visualize the simulation results."""
@@ -57,18 +53,18 @@ class ShowcaseSimulation:
         ax = fig.add_subplot(111, projection='3d')
 
         # Set up the grid
-        ax.set_xlim([0, grid_size])
-        ax.set_ylim([0, grid_size])
-        ax.set_zlim([0, grid_size])
+        ax.set_xlim([0, globals.grid_size])
+        ax.set_ylim([0, globals.grid_size])
+        ax.set_zlim([0, globals.grid_size])
         ax.set_xlabel('X-axis')
         ax.set_ylabel('Y-axis')
         ax.set_zlabel('Z-axis')
 
         def update(frame):
             ax.cla()
-            ax.set_xlim([0, grid_size])
-            ax.set_ylim([0, grid_size])
-            ax.set_zlim([0, grid_size])
+            ax.set_xlim([0, globals.grid_size])
+            ax.set_ylim([0, globals.grid_size])
+            ax.set_zlim([0, globals.grid_size])
             ax.set_xlabel('X-axis')
             ax.set_ylabel('Y-axis')
             ax.set_zlabel('Z-axis')
@@ -105,16 +101,32 @@ if __name__ == "__main__":
     # ----------------------
     # TOGGLE FOXTROT MODES HERE
     # ----------------------
-    STATIONARY_FOXTROT = True
-    RECTANGULAR_FOXTROT = False
+    globals.STATIONARY_FOXTROT = True
+    globals.COMPLEX_REWARD = True
+    globals.RECTANGULAR_FOXTROT = False
+    globals.BASIC_REWARD = False
+    globals.RAND_POS = False
+    globals.FIXED_POS = True
+    globals.RAND_FIXED_CCA = True
 
     # Initialize environment with the updated flags
-    env = PPOEnv(grid_size=grid_size, num_cca=NUM_CCA)
+    base_env = PPOEnv(grid_size=globals.grid_size, num_cca=NUM_CCA)
+    dummy_env = DummyVecEnv([lambda: base_env])
+
+    # Load the normalization stats
+    vec_env = VecNormalize.load("./PPO_V2/Trained_VecNormalize.pkl", dummy_env)
+
+    # Important: Set to evaluation mode
+    vec_env.training = False
+    # Typically disable reward normalization at test time
+    vec_env.norm_reward = False
+    # Also typically freeze observation normalization updates:
+    # vec_env.eval() in SB3 2.0, or set vec_env.training=False in older versions
 
     # Initialize the showcase simulation
     showcase = ShowcaseSimulation(
         model_path="./PPO_V2/Trained_Model",
-        env=env,
+        vec_env=vec_env,
         steps=STEPS
     )
 
