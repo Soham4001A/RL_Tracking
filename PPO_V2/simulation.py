@@ -4,7 +4,8 @@ from gymnasium.spaces import Box
 import numpy as np
 from math import pow
 from stable_baselines3 import PPO
-from stable_baselines3.common.vec_env import DummyVecEnv
+from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
+import os
 
 # Internal Module Imports
 from classes import *
@@ -15,12 +16,16 @@ from globals import (
     STATIONARY_FOXTROT,
     RECTANGULAR_FOXTROT,
     COMPLEX_REWARD, 
-    BASIC_REWARD
+    BASIC_REWARD,
+    FIXED_POS,
+    RAND_POS,
+    RAND_FIXED_CCA,
+    spawn_range
 )
 
 DEBUG = True
 REWARD_DEBUG = True
-POSITIONAL_DEBUG = False
+POSITIONAL_DEBUG = True
 
 class PPOEnv(gym.Env):
     """Custom PPO Environment for controlling CCA objects."""
@@ -29,7 +34,7 @@ class PPOEnv(gym.Env):
         self.grid_size = grid_size
         self.num_cca = num_cca
         self.current_step = 0
-        self.max_steps = 10_000 # Epsiode Length in the simulation
+        self.max_steps = 1000 # Epsiode Length in the simulation
         self.cube_state = {}
 
         # Action space: Continuous movement in 3D space
@@ -45,9 +50,25 @@ class PPOEnv(gym.Env):
             dtype=np.float32
         )
 
-        # Initialize positions (randomized in the reset function)
-        self.cca_positions = [np.array([100, 100, 100]) for _ in range(num_cca)]
-        self.foxtrot_position = np.random.randint(0, self.grid_size, size=3)
+        # Initialize Foxtrot positions
+        if RAND_POS:
+            self.foxtrot_position = np.random.randint(200, 301, size=3)
+        elif FIXED_POS:
+            self.foxtrot_position = np.array([250,250,250])
+
+        # Initialize CCA positions (randomized in the reset function)
+        if RAND_FIXED_CCA:
+            self.cca_positions = [
+                np.clip(
+                    self.foxtrot_position + np.random.randint(-spawn_range, spawn_range + 1, size=3),
+                    0, self.grid_size - 1
+                ) for _ in range(self.num_cca)
+            ]
+        
+        else:
+            self.cca_positions = [
+            np.random.randint(0, self.grid_size, size=3) for _ in range(self.num_cca)
+            ]
 
         # Initialize history for last 5 positions
         self.cca_history = [np.tile(pos, (6, 1)) for pos in self.cca_positions]
@@ -60,10 +81,20 @@ class PPOEnv(gym.Env):
         self.cube_state = {}
         self.current_step = 0
         
-        # Randomize CCA positions and reset history
-        self.cca_positions = [
+        # Create CCA Positions
+        if RAND_FIXED_CCA:
+            self.cca_positions = [
+                np.clip(
+                    self.foxtrot_position + np.random.randint(-spawn_range, spawn_range + 1, size=3),
+                    0, self.grid_size - 1
+                ) for _ in range(self.num_cca)
+            ]
+        
+        else:
+            self.cca_positions = [
             np.random.randint(0, self.grid_size, size=3) for _ in range(self.num_cca)
-        ]
+            ]
+
         self.cca_history = [np.tile(pos, (6, 1)) for pos in self.cca_positions]
 
         # Randomize Foxtrot position on the cube path
@@ -95,7 +126,10 @@ class PPOEnv(gym.Env):
             self.foxtrot_position = np.round(self.foxtrot_position).astype(int)
 
         if STATIONARY_FOXTROT:
-            self.foxtrot_position = np.random.randint(0, self.grid_size, size=3)
+            if RAND_POS:
+                self.foxtrot_position = np.random.randint(200, 301, size=3)
+            elif FIXED_POS:
+                self.foxtrot_position = np.array([250,250,250])
 
         # Reset Foxtrot history
         self.foxtrot_history = np.tile(self.foxtrot_position, (6, 1))
@@ -104,7 +138,7 @@ class PPOEnv(gym.Env):
             print(f"Foxtrot spawned at {self.foxtrot_position}")
             for i, pos in enumerate(self.cca_positions):
                 print(f"CCA {i} spawned at {pos}")
-
+                
         obs = self._get_observation()
         info = {}  # Add an empty dictionary for compatibility
         return obs, info
@@ -134,13 +168,10 @@ class PPOEnv(gym.Env):
             self.cca_history[i][-1] = self.cca_positions[i]
 
         # Update Foxtrot position and history
-        if STATIONARY_FOXTROT:
-            self.foxtrot_position = np.random.randint(0, self.grid_size, size=3)
             
-        elif RECTANGULAR_FOXTROT:
+        if RECTANGULAR_FOXTROT:
             self.foxtrot_position = foxtrot_movement_fn_cube(self.foxtrot_position, self.cube_state)
-        
-        self.foxtrot_position = np.clip(self.foxtrot_position, 0, self.grid_size - 1)
+            self.foxtrot_position = np.clip(self.foxtrot_position, 0, self.grid_size - 1)
 
         # Update Foxtrot history
         self.foxtrot_history = np.roll(self.foxtrot_history, shift=-1, axis=0)
@@ -168,11 +199,15 @@ class PPOEnv(gym.Env):
         return self._get_observation(), reward, terminated, truncated, {}
 
     def _get_observation(self):
-        """Return the current state as a flat array."""
+        # We have self.cca_history[i] shape (6, 3) for 6 time steps
+        # and self.foxtrot_history shape (6, 3)
+        
         state = []
-        for i in range(self.num_cca):
-            state.extend(self.cca_history[i].flatten())  # Add CCA history
-        state.extend(self.foxtrot_history.flatten())  # Add Foxtrot history
+        for t in range(6):  # for each time step
+            # If you had multiple CCAs, you’d loop i in range(num_cca), etc.
+            state.extend(self.cca_history[0][t])    # shape (3,)
+            state.extend(self.foxtrot_history[t])   # shape (3,)
+
         return np.array(state, dtype=np.float32)
 
     def _decode_action(self, action):
@@ -187,29 +222,36 @@ class PPOEnv(gym.Env):
             # Complex reward logic
             reward = 0.0
             alpha = 300.0
-            beta = 0.2
+            beta = 0.1  
             capture_bonus = 1000.0
             capture_radius = 5.0
-            alpha_capture_radius = 50
-            beta_capture_radius = 150
+            alpha_capture_radius = 20
+            beta_capture_radius = 50
 
             for i, pos in enumerate(self.cca_positions):
-                distance = np.linalg.norm(pos - self.foxtrot_position)
-                prev_distance = np.linalg.norm(self.cca_history[i][-2] - self.foxtrot_position)
-                improvement = (prev_distance - distance) / prev_distance if prev_distance > 0 else 0
-                reward += alpha * improvement
-                reward -= beta * distance
-                if distance < capture_radius:
+                distances = [
+                    np.linalg.norm(history_pos - self.foxtrot_position)
+                    for history_pos in self.cca_history[i][-3:]  # Use last 3 positions
+                ]
+                avg_improvement = np.mean([
+                    (distances[j] - distances[j+1]) / distances[j] if distances[j] > 0 else 0
+                    for j in range(len(distances) - 1)
+                ])
+                
+                reward += alpha * avg_improvement  # Reward average improvement
+                reward -= beta * distances[-1]  # Penalize current distance
+                
+                if distances[-1] < capture_radius:
                     reward += capture_bonus
-                if distance < alpha_capture_radius:
+                elif distances[-1] < alpha_capture_radius:
                     reward += 500
-                if distance < beta_capture_radius:
-                    reward += 30
+                elif distances[-1] < beta_capture_radius:
+                    reward += 200
 
-            reward = np.clip(reward, -5000, 5000)
+            reward = np.clip(reward, -2000, 2000)
 
             if REWARD_DEBUG:
-                print(f"Complex Reward: {reward}")
+                print(f"Complex Reward: {reward}, Distance is {distances}")
 
             return reward
 
@@ -241,11 +283,12 @@ if __name__ == "__main__":
     
     
     env = PPOEnv(grid_size=grid_size, num_cca=num_cca)
-    vec_env = DummyVecEnv([lambda: env])
+    vec_env = DummyVecEnv([lambda: PPOEnv()])
+    vec_env = VecNormalize(vec_env, norm_obs=True, norm_reward=True)
     policy_kwargs = dict(
         features_extractor_class=Transformer,
-        features_extractor_kwargs=dict(embed_dim=90, num_heads=6, ff_hidden=256, num_layers=8, seq_len=6),
-        net_arch = dict(vf=[128,256,256,64]) #use keyword (pi) for policy network architecture -> additional ffn for decoding output, (vf) for reward func
+        features_extractor_kwargs=dict(embed_dim=72, num_heads=8, ff_hidden=72*5, num_layers=6, seq_len=6),
+        net_arch = dict(pi = [128,128,64],vf=[128,256,256,64]) #use keyword (pi) for policy network architecture -> additional ffn for decoding output, (vf) for reward func
     )
 
     model = PPO(
@@ -254,36 +297,61 @@ if __name__ == "__main__":
         env=vec_env,
         verbose=1,
         normalize_advantage = True,
-        use_sde = False, # Essentially reducing delta of actions when rewards are very positive
+        use_sde = False, # Essentially reducing delta of actions when rewards are very positive (breaks it while initially learning)
         #sde_sample_freq = 3,
-        learning_rate=linear_schedule(initial_value= 0.0002),
-        n_steps=3000, # Steps per learning update
-        batch_size=300,
+        learning_rate=linear_schedule(initial_value= 0.00035),
+        n_steps=300, # Steps per learning update
+        batch_size=50,
         gamma=0.9,
-        gae_lambda= 0.35,
+        gae_lambda= 0.75,
         vf_coef = 0.8,
-        clip_range=0.8, # Clips larger updates to remain within +- 20%
+        clip_range=0.4, # Clips larger updates to remain within +- 60%
         #ent_coef=0.05,
         #tensorboard_log="./Patrol&Proetect_PPO/ppo_patrol_tensorboard/"
     )
 
     # Cirriculum Learning
 
-    # Train the model with stationary foxtrot (maybe add small gridsize too)
+    # Train the model with stationary foxtrot (maybed small gridsize too) -> make model & env a class by itself and call it via a getter
     STATIONARY_FOXTROT = True
     COMPLEX_REWARD = True
     RECTANGULAR_FOXTROT = False
     BASIC_REWARD = False
+    RAND_POS = False
+    FIXED_POS = True
+    RAND_FIXED_CCA = True
+    model.learn(total_timesteps=50_000)
+
+    # Continutation but now CCA's are random spawn farther away
+    STATIONARY_FOXTROT = True
+    COMPLEX_REWARD = True
+    RECTANGULAR_FOXTROT = False
+    BASIC_REWARD = False
+    RAND_POS = False
+    FIXED_POS = True
+    RAND_FIXED_CCA = False
     model.learn(total_timesteps=100_000)
+
+    # Continue with random stationary foxtrot (maybed small gridsize too)
+    STATIONARY_FOXTROT = True
+    COMPLEX_REWARD = True
+    RECTANGULAR_FOXTROT = False
+    BASIC_REWARD = False
+    RAND_POS = True
+    FIXED_POS = False
+    model.learn(total_timesteps=600_000)
  
+    # Finally, train it to follow a movement function
     #STATIONARY_FOXTROT = False
     #BASIC_REWARD = False
     #RECTANGULAR_FOXTROT = True
     #COMPLEX_REWARD = True
-    # Train the model with moving foxtrot
-    #model.learn(total_timesteps=300_000)
+    #RAND_POS = False
+    #FIXED_POS = False
+    #model.learn(total_timesteps=900_000)
 
 
     # Save the model
     model.save("./PPO_V2/Trained_Model")
     print("Model Saved Succesfully!")
+    os.system("pmset displaysleepnow")

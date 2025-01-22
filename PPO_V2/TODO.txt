@@ -13,4 +13,4 @@ PATH FIXING -->
 PATROL & PROTECT OBJECTIVE -->
 1. Start with basic third object tracking & interception
 
-Random location isn't training but setting it to a single point is working with complex reward
+Random location isn't training but setting it to a single point is working (trying with rand point rn) with complex reward

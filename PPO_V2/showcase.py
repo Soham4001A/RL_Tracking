@@ -96,7 +96,7 @@ class ShowcaseSimulation:
             if frame == 1:  # Just so the legend is not repeated every frame
                 ax.legend()
 
-        anim = FuncAnimation(fig, update, frames=self.steps, interval=200)
+        anim = FuncAnimation(fig, update, frames=self.steps, interval=10)
         plt.show()
 
 
@@ -106,7 +106,7 @@ if __name__ == "__main__":
     # TOGGLE FOXTROT MODES HERE
     # ----------------------
     STATIONARY_FOXTROT = True
-    #RECTANGULAR_FOXTROT = True
+    RECTANGULAR_FOXTROT = False
 
     # Initialize environment with the updated flags
     env = PPOEnv(grid_size=grid_size, num_cca=NUM_CCA)
