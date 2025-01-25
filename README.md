@@ -1,5 +1,3 @@
-Here’s a detailed README.md file for your project based on the work you’ve done so far.
-
 Object Tracking RL with PPO and Terrain Awareness
 
 This project focuses on using Reinforcement Learning (RL) to train an agent (referred to as a CCA) to track and intercept a moving target (Foxtrot) in a 3D environment with dynamic terrain. The primary objective is to build an intelligent system capable of handling complex scenarios, including varying terrains, dynamic obstacles, and multi-agent interactions. (NOTE: the latest implementation is PPO_V2)
@@ -142,4 +140,3 @@ This project leverages the following tools and libraries:
 	•	Stable-Baselines3 for the PPO implementation.
 	•	NumPy for mathematical operations.
 
-Feel free to customize this README.md file further to suit your needs. Let me know if you’d like additional sections or refinements!****
