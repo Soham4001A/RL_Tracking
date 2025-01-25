@@ -20,9 +20,22 @@ class ShowcaseSimulation:
         self.cca_positions = []
         self.foxtrot_positions = []
 
+        # Initially, we do NOT grab the terrain map here,
+        self.terrain_map = None
+        self.grid_size = globals.grid_size
+        self.block_size = 50  # This is used for terrain discretization
+        self.x_blocks = None
+        self.y_blocks = None
+
     def run_simulation(self):
         """Run the simulation and collect positions for visualization."""
         obs = self.env.reset()
+
+        # Right after reset, the environment re-generated the terrain.
+        if globals.ENABLE_TERRAIN:
+            self.terrain_map = self.env.get_attr('terrain_map')[0]
+            self.x_blocks = self.terrain_map.shape[0]
+            self.y_blocks = self.terrain_map.shape[1]
 
         for _ in range(self.steps):
             # Get the action from the trained model
@@ -52,6 +65,24 @@ class ShowcaseSimulation:
         fig = plt.figure()
         ax = fig.add_subplot(111, projection='3d')
 
+        if self.terrain_map is None:
+            print("No terrain map to visualize!")
+            return
+
+        x_coords = np.arange(0, self.grid_size, self.grid_size // self.x_blocks)
+        y_coords = np.arange(0, self.grid_size, self.grid_size // self.y_blocks)
+        x_grid, y_grid = np.meshgrid(x_coords, y_coords)
+
+        if globals.ENABLE_TERRAIN:
+            self.terrain_map = self.env.get_attr('terrain_map')[0]
+            z_values = self.terrain_map[:, :, 2]
+
+        # Terrain map shape is (x_blocks, y_blocks)
+        z_values = self.terrain_map[:, :, 2]  # Extract the terrain height (z_terrain) values
+
+        # Plot the terrain surface
+        ax.plot_surface(x_grid, y_grid, z_values, cmap='terrain', alpha=0.3, edgecolor='black')
+
         # Set up the grid
         ax.set_xlim([0, globals.grid_size])
         ax.set_ylim([0, globals.grid_size])
@@ -59,9 +90,16 @@ class ShowcaseSimulation:
         ax.set_xlabel('X-axis')
         ax.set_ylabel('Y-axis')
         ax.set_zlabel('Z-axis')
+        ax.grid(False)  # Enable gridlines for better clarity
 
         def update(frame):
             ax.cla()
+
+            # Replot terrain surface
+            ax.plot_surface(
+                x_grid, y_grid, z_values, cmap='terrain', alpha=0.5, edgecolor='black', zorder=1
+            )
+
             ax.set_xlim([0, globals.grid_size])
             ax.set_ylim([0, globals.grid_size])
             ax.set_zlim([0, globals.grid_size])
@@ -69,30 +107,25 @@ class ShowcaseSimulation:
             ax.set_ylabel('Y-axis')
             ax.set_zlabel('Z-axis')
 
+            # Plot CCA paths and current positions
             for i in range(NUM_CCA):
-                if frame >= len(self.cca_positions) or i >= len(self.cca_positions[0]):
-                    continue
+                if frame < len(self.cca_positions):
+                    cca_path = np.array([pos[i] for pos in self.cca_positions[:frame]])
+                    if len(cca_path) > 0:
+                        ax.plot(cca_path[:, 0], cca_path[:, 1], cca_path[:, 2], color='green')
+                        ax.scatter(*cca_path[-1], color='green', s=80, label=f'CCA {i + 1} Position')
 
-                # CCA path up to 'frame'
-                cca_path = np.array([pos[i] for pos in self.cca_positions[:frame]])
-                if len(cca_path) > 0:
-                    ax.plot(cca_path[:, 0], cca_path[:, 1], cca_path[:, 2],
-                            color='green', label=f'CCA {i + 1} Path' if frame == 1 and i == 0 else "")
-                    # Plot current CCA position as a larger scatter
-                    ax.scatter(*cca_path[-1], color='green', s=80)
-
+            # Plot Foxtrot path and current position
             if frame < len(self.foxtrot_positions):
                 foxtrot_path = np.array(self.foxtrot_positions[:frame])
                 if len(foxtrot_path) > 0:
-                    ax.plot(foxtrot_path[:, 0], foxtrot_path[:, 1], foxtrot_path[:, 2],
-                            color='orange', label='Foxtrot Path' if frame == 1 else "")
-                    # Plot current Foxtrot position as a larger scatter
-                    ax.scatter(*foxtrot_path[-1], color='orange', s=80)
+                    ax.plot(foxtrot_path[:, 0], foxtrot_path[:, 1], foxtrot_path[:, 2], color='orange')
+                    ax.scatter(*foxtrot_path[-1], color='orange', s=100, label='Foxtrot Position')
 
-            if frame == 1:  # Just so the legend is not repeated every frame
+            if frame == 1:  # Add the legend once
                 ax.legend()
-            
-            # Slow rotation
+
+            # Adjust viewing angle for dynamic effect
             ax.view_init(elev=30, azim=frame * 0.5)
             
         anim = FuncAnimation(fig, update, frames=self.steps, interval=50)
@@ -113,7 +146,8 @@ if __name__ == "__main__":
     globals.FIXED_POS = False
     globals.RECTANGULAR_FOXTROT = True
     globals.RAND_FIXED_CCA = False
-    globals.PROXIMITY_CCA = False
+    globals.PROXIMITY_CCA = True
+    globals.ENABLE_TERRAIN = True
 
     # Initialize environment with the updated flags
     base_env = PPOEnv(grid_size=globals.grid_size, num_cca=NUM_CCA)

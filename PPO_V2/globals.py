@@ -17,3 +17,6 @@ PROXIMITY_CCA = False
 #Function Flags
 COMPLEX_REWARD = False
 BASIC_REWARD = False
+
+#Features
+ENABLE_TERRAIN = False

@@ -134,92 +134,97 @@ def foxtrot_movement_fn(position):
     return new_position
 
 
-def foxtrot_movement_fn_cube(position, cube_state):
-    """
-    Movement function for Foxtrot to alternate between:
-      - Rectangle movement in (x,y) while z is fixed
-      - Pure z-axis movement to a random z-coordinate
-    Repeats these two phases infinitely.
-    """
+def foxtrot_movement_fn_cube(position, cube_state, terrain_fn):
+        """
+        Movement function for Foxtrot to alternate between:
+        - Rectangle movement in (x, y) while avoiding terrain in z.
+        - Pure z-axis movement to a random z-coordinate.
+        Repeats these two phases infinitely, with terrain-aware adjustments.
+        :param position: Current position of Foxtrot.
+        :param cube_state: Persistent state for managing movement phases and parameters.
+        :param terrain_fn: Function to query the terrain's z-value at (x, y).
+        """
+        # Ensure float values for precise movements
+        position = position.astype(float)
 
-    # Make sure we're working in float space so partial steps won't error
-    position = position.astype(float)
-
-    if "phase" not in cube_state:
-        cube_state["phase"] = "rectangle"
-        cube_state["rectangle"] = {
-            "vertices": None,
-            "current_index": 0,
-            "laps_completed": 0,
-        }
-        cube_state["target_z"] = None
-
-    if cube_state["phase"] == "rectangle":
-        rect_info = cube_state["rectangle"]
-
-        if rect_info["vertices"] is None:
-            # Pick random rectangle size
-            length = np.random.randint(50, 200)
-            width = np.random.randint(50, 200)
-
-            center = position[:2]  # current (x, y)
-            v0 = center + np.array([+length/2, +width/2])
-            v1 = center + np.array([-length/2, +width/2])
-            v2 = center + np.array([-length/2, -width/2])
-            v3 = center + np.array([+length/2, -width/2])
-
-            rect_info["vertices"] = [v0, v1, v2, v3]
-            rect_info["current_index"] = 0
-            rect_info["laps_completed"] = 0
-
-        vertices = rect_info["vertices"]
-        target_vertex = vertices[rect_info["current_index"]]
-
-        direction_2d = target_vertex - position[:2]
-        dist_2d = np.linalg.norm(direction_2d)
-
-        if dist_2d <= step_size:
-            # Snap to corner
-            position[:2] = target_vertex
-            # Advance
-            rect_info["current_index"] = (rect_info["current_index"] + 1) % len(vertices)
-
-            # If we looped back to corner 0, one lap is done
-            if rect_info["current_index"] == 0:
-                rect_info["laps_completed"] += 1
-                # Switch to z phase after 1 complete loop
-                if rect_info["laps_completed"] >= 1:
-                    cube_state["phase"] = "z_movement"
-                    cube_state["target_z"] = np.random.randint(0, grid_size)
-
-        else:
-            # Take a partial step
-            step_dir = direction_2d / dist_2d  # unit vector
-            position[:2] += step_dir * step_size
-
-    elif cube_state["phase"] == "z_movement":
-        target_z = cube_state["target_z"]
-        dz = target_z - position[2]
-
-        if abs(dz) <= step_size:
-            # Snap to final z
-            position[2] = target_z
-            # Go back to rectangle
+        # Initialize cube_state if not already done
+        if "phase" not in cube_state:
             cube_state["phase"] = "rectangle"
-            # Force a fresh rectangle next time
             cube_state["rectangle"] = {
                 "vertices": None,
                 "current_index": 0,
                 "laps_completed": 0,
             }
-        else:
-            # Move up or down
-            position[2] += np.sign(dz) * step_size
+            cube_state["target_z"] = None
 
-    # Clip, round, cast back to int so environment remains consistent
-    position = np.clip(position, 0, grid_size - 1)
-    position = np.round(position).astype(int)
-    return position
+        # Terrain-aware rectangle movement phase
+        if cube_state["phase"] == "rectangle":
+            rect_info = cube_state["rectangle"]
+
+            # Generate rectangle vertices if not set
+            if rect_info["vertices"] is None:
+                length = np.random.randint(50, 200)
+                width = np.random.randint(50, 200)
+                center = position[:2]  # Current (x, y)
+                v0 = center + np.array([+length / 2, +width / 2])
+                v1 = center + np.array([-length / 2, +width / 2])
+                v2 = center + np.array([-length / 2, -width / 2])
+                v3 = center + np.array([+length / 2, -width / 2])
+                rect_info["vertices"] = [v0, v1, v2, v3]
+
+            # Move towards the current rectangle corner
+            vertices = rect_info["vertices"]
+            target_vertex = vertices[rect_info["current_index"]]
+            direction_2d = target_vertex - position[:2]
+            dist_2d = np.linalg.norm(direction_2d)
+
+            if dist_2d <= step_size:
+                # Snap to the corner and advance to the next
+                position[:2] = target_vertex
+                rect_info["current_index"] = (rect_info["current_index"] + 1) % len(vertices)
+
+                # After a full lap, switch to z movement phase
+                if rect_info["current_index"] == 0:
+                    rect_info["laps_completed"] += 1
+                    if rect_info["laps_completed"] >= 1:
+                        cube_state["phase"] = "z_movement"
+                        cube_state["target_z"] = np.random.randint(0, grid_size)
+
+            else:
+                # Take a partial step towards the corner
+                step_dir = direction_2d / dist_2d
+                position[:2] += step_dir * step_size
+
+            # Terrain avoidance during rectangle movement
+            terrain_z = terrain_fn(int(position[0]), int(position[1]))
+            if position[2] <= terrain_z:
+                # Adjust z to avoid terrain
+                position[2] = terrain_z + 1
+
+        # Terrain-aware z movement phase
+        elif cube_state["phase"] == "z_movement":
+            target_z = cube_state["target_z"]
+            dz = target_z - position[2]
+
+            if abs(dz) <= step_size:
+                # Snap to the target z and return to rectangle phase
+                position[2] = target_z
+                cube_state["phase"] = "rectangle"
+                cube_state["rectangle"]["vertices"] = None
+            else:
+                # Move towards the target z
+                position[2] += np.sign(dz) * step_size
+
+            # Terrain avoidance during z movement
+            terrain_z = terrain_fn(int(position[0]), int(position[1]))
+            if position[2] <= terrain_z:
+                # Adjust z to avoid terrain
+                position[2] = terrain_z + 1
+
+        # Clip, round, and cast position to int to maintain consistency
+        position = np.clip(position, 0, grid_size - 1)
+        position = np.round(position).astype(int)
+        return position
 
 class Transformer(BaseFeaturesExtractor):
     def __init__(

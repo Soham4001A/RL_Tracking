@@ -1,0 +1,53 @@
+" HERE WE GOOOOO "
+
+PATH FIXING -->
+1. Fix Path for Foxtrot -> Done {1/21/2025}
+2. Add random location spawing for CCA's to train -> Done {1/19/2025}
+3. Add random location spawing for Foxtrot to train -> Done {1/19/2025}
+4. Add cirriculum based learning for model with various basic scenarios -> Done {1/21/2025}
+
+PATROL & PROTECT OBJECTIVE -->
+1. Start with basic third object tracking & interception -> Done {1/24/2025}
+
+TERRAIN ON Z AXIS + OBJECT TRACKING -->
+1. Start with basic terrain with random spawn (CCA + stationary Foxtrot) & interception -> Done {1/25/2025} ??
+
+SINGLE CCA ADVERSARY SWITCHING -->
+1. CCA protects Foxtrot but intercepts adversarial targets that enter its proection zone (missiles)
+
+
+
+" One Day "
+
+EXPANSION TO MULTIDISCRETE -->
+1. Ensure that when expanding CCA's - we have correct input shaping -> see o1 suggestion
+2. Ensure that when expanding CCA's - Move to MultiDiscrete
+
+
+
+LINKEDIN POST ->
+
+Over the past few weeks, I’ve been diving deep into the world of Reinforcement Learning (RL) to expand my technical skills and challenge myself with new concepts. 🚀
+
+To make this learning journey hands-on and impactful, I developed my own custom simulation—a dynamic environment where an agent must track and intercept moving targets while navigating complex terrains. Along the way, I implemented techniques like reward shaping, curriculum learning, and transformer-based feature extraction to improve the model’s performance and robustness. 🎯
+
+This project has been an exciting blend of problem-solving, creativity, and resilience. Below, I’m sharing some of the lessons I’ve learned, which I hope can inspire and guide others on similar journeys. 🤖📚
+
+⏳ Patience is Critical ⏳
+    It’s important to allow the model sufficient time to train and stabilize. Making too many changes during the training process can introduce excessive variables, making debugging significantly harder.
+🧠 Foundation First 🧠
+    Understanding the core concepts and logical flow is essential. This knowledge serves as the foundation for debugging and for grasping the nuances of how these systems operate.
+🚀 Start Simple, Scale Smartly 🚀
+    Begin with small, manageable setups, but always design infrastructure with scalability in mind. This approach ensures your work remains adaptable as complexity grows.
+🔍 Problem-Solving Through Isolation 🔍
+    When the path forward isn’t clear, break problems into smaller, isolated components. This makes it easier to identify issues and focus on resolving them systematically.
+🤝 Collaboration is Key 🤝
+    When you’re stuck, seeking help or a fresh perspective can often make a big difference. A second set of eyes never hurts and can lead to valuable insights.
+🌟 Failures Are Stepping Stones 🌟
+    Understanding why something doesn’t work can be just as enlightening as understanding why it does. Failures provide critical insights that drive growth and improvement.
+💡 Innovate Boldly 💡
+    If the solution isn’t obvious, don’t hesitate to experiment with your own strategies. Innovation often stems from challenging the norm and trying something new.
+🎉 Enjoy the Process 🎉
+    Amidst the challenges, it’s important to remember to have fun. The journey of learning and problem-solving is as rewarding as the outcome itself.
+
+I’m excited to continue expanding the complexity of this project and exploring practical applications of reinforcement learning in real-world environments. The potential of AI and ML never ceases to amaze me, and I look forward to contributing to this incredible field. 🚀🌟
