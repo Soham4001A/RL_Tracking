@@ -91,7 +91,10 @@ class ShowcaseSimulation:
 
             if frame == 1:  # Just so the legend is not repeated every frame
                 ax.legend()
-
+            
+            # Slow rotation
+            ax.view_init(elev=30, azim=frame * 0.5)
+            
         anim = FuncAnimation(fig, update, frames=self.steps, interval=50)
         plt.show()
 
@@ -110,6 +113,7 @@ if __name__ == "__main__":
     globals.FIXED_POS = False
     globals.RECTANGULAR_FOXTROT = True
     globals.RAND_FIXED_CCA = False
+    globals.PROXIMITY_CCA = False
 
     # Initialize environment with the updated flags
     base_env = PPOEnv(grid_size=globals.grid_size, num_cca=NUM_CCA)
