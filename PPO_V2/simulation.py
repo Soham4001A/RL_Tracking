@@ -25,16 +25,24 @@ class PPOEnv(gym.Env):
         self.max_steps = 500 # Epsiode Length in the simulation
         self.cube_state = {}
 
+        # Reward Function Utils
+        self.capture_radius = globals.step_size
+        self.collision_radius = 1
+        self.alpha_capture_radius = 20
+        self.beta_capture_radius = 50
+        self.charlie_capture_radius = 75
+
         # Action space: Continuous movement in 3D space
         self.action_space = spaces.Box(
             low=-step_size, high=step_size, shape=(self.num_cca, 3), dtype=np.float32
         )
 
-        # Observation space: Includes last 5 positions for CCAs and Foxtrot
         self.observation_space = spaces.Box(
             low=0,
             high=self.grid_size,
-            shape=(3 * self.num_cca * 6 + 3 * 6,),  # Add 6 sets of 3D positions for Foxtrot
+            shape=(
+                6 * (3 * self.num_cca + 3 + 3 * self.num_cca),  # 6 time steps of [CCA positions, Foxtrot positions, CCA actions]
+            ),
             dtype=np.float32
         )
 
@@ -60,11 +68,12 @@ class PPOEnv(gym.Env):
             self.cca_positions = [
             np.random.randint(0, self.grid_size, size=3) for _ in range(self.num_cca)
             ]
-
-        # Initialize history for last 5 positions
+        
+        self.action_history = [np.zeros((6, 3), dtype=np.float32) for _ in range(self.num_cca)]  # 6 time steps of actions per CCA
         self.cca_history = [np.tile(pos, (6, 1)) for pos in self.cca_positions]
         self.foxtrot_history = np.tile(self.foxtrot_position, (6, 1))  # 6 rows for 5 past + current position
 
+        
     def reset(self, seed=None, **kwargs):
         """Reset the environment to the initial state."""
         super().reset(seed=seed)  # Properly seed the environment
@@ -72,7 +81,9 @@ class PPOEnv(gym.Env):
         self.cube_state = {}
         self.current_step = 0
 
+        self.action_history = [np.zeros((6, 3), dtype=np.float32) for _ in range(self.num_cca)]  # 6 time steps of actions per CCA
         self.cca_history = [np.tile(pos, (6, 1)) for pos in self.cca_positions]
+        self.foxtrot_history = np.tile(self.foxtrot_position, (6, 1))  # 6 rows for 5 past + current position
 
         # Randomize Foxtrot position on the cube path
         side_length = 200  # Length of each cube edge
@@ -152,7 +163,10 @@ class PPOEnv(gym.Env):
             raise ValueError(f"Unexpected action shape: {actions.shape}")
 
         # Now 'actions' has shape (num_cca, 3), so your loop works as intended
+        # Update action history for each CCA
         for i, action in enumerate(actions):
+            self.action_history[i] = np.roll(self.action_history[i], shift=-1, axis=0)
+            self.action_history[i][-1] = action
             movement_vector = self._decode_action(action)
             self.cca_positions[i] += movement_vector.astype(int)
             self.cca_positions[i] = np.clip(self.cca_positions[i], 0, self.grid_size - 1)
@@ -161,18 +175,19 @@ class PPOEnv(gym.Env):
             self.cca_history[i] = np.roll(self.cca_history[i], shift=-1, axis=0)
             self.cca_history[i][-1] = self.cca_positions[i]
 
-        # Update Foxtrot position and history
-            
+        # Calculate reward
+        reward = self._calculate_reward()
+
+        # Update Foxtrot position and history  
         if globals.RECTANGULAR_FOXTROT:
             self.foxtrot_position = foxtrot_movement_fn_cube(self.foxtrot_position, self.cube_state)
             self.foxtrot_position = np.clip(self.foxtrot_position, 0, self.grid_size - 1)
 
+        
         # Update Foxtrot history
         self.foxtrot_history = np.roll(self.foxtrot_history, shift=-1, axis=0)
         self.foxtrot_history[-1] = self.foxtrot_position
 
-        # Calculate reward
-        reward = self._calculate_reward()
 
         # Check success condition for ANY of the CCAs:
         done_success = False 
@@ -196,15 +211,12 @@ class PPOEnv(gym.Env):
         return self._get_observation(), reward, terminated, truncated, {}
 
     def _get_observation(self):
-        # We have self.cca_history[i] shape (6, 3) for 6 time steps
-        # and self.foxtrot_history shape (6, 3)
-        
         state = []
-        for t in range(6):  # for each time step
-            # If you had multiple CCAs, you’d loop i in range(num_cca), etc.
-            state.extend(self.cca_history[0][t])    # shape (3,)
-            state.extend(self.foxtrot_history[t])   # shape (3,)
-
+        for t in range(6):  # For each time step
+            for i in range(self.num_cca):  # For each CCA
+                state.extend(self.cca_history[i][t])  # CCA position
+                state.extend(self.action_history[i][t])  # CCA action
+            state.extend(self.foxtrot_history[t])  # Foxtrot position
         return np.array(state, dtype=np.float32)
 
     def _decode_action(self, action):
@@ -213,58 +225,82 @@ class PPOEnv(gym.Env):
 
     def _calculate_reward(self):
         """
-        Calculate reward based on the current reward flag settings.
+        Refactored reward function using potential-based reward shaping and multi-objective optimization.
         """
         if globals.COMPLEX_REWARD:
-            # Complex reward logic
+            # Initialize reward
             reward = 0.0
-            alpha = 300.0
-            beta = 0.65  
-            capture_bonus = 1000.0
-            capture_radius = 3.0
-            collision_radius = 1.0
-            alpha_capture_radius = 10 # 10
-            beta_capture_radius = 20  # 20
-            charlie_capture_radius = 50
 
+            # Hyperparameters
+            alpha = 300.0              # Weight for progress
+            beta = 0.05                # Weight for energy efficiency
+            gamma_collision = -2000.0  # Penalty for collisions
+            gamma = 0.1                # Potential shaping weight
+            max_action_norm = 10.0     # Maximum expected action magnitude
+
+            # Define the potential function
+            def potential():
+                return -np.mean([np.linalg.norm(pos - self.foxtrot_position) for pos in self.cca_positions])
+
+            # Current and previous potential
+            current_potential = potential()
+            previous_potential = getattr(self, 'previous_potential', current_potential)
+
+            # Potential-based shaping
+            shaped_reward = gamma * (current_potential - previous_potential)
+            reward += shaped_reward
+
+            # Update previous potential for next step
+            self.previous_potential = current_potential
+
+            # Progress-Based Reward
+            # Calculate average progress across all CCAs
+            progress = 0.0
             for i, pos in enumerate(self.cca_positions):
-                distances = [
-                    np.linalg.norm(history_pos - self.foxtrot_position)
-                    for history_pos in self.cca_history[i][-3:]  # Use last 3 positions
-                ]
-                avg_improvement = np.mean([
-                    (distances[j] - distances[j+1]) / distances[j] if distances[j] > 0 else 0
-                    for j in range(len(distances) - 1)
-                ])
-                
-                reward += alpha * avg_improvement  # Reward average improvement
-                reward -= beta * distances[-1]  # Penalize current distance
-                
-                if distances[-1] < capture_radius:
-                    reward += capture_bonus
-                elif distances[-1] < alpha_capture_radius:
-                    reward += 300 #100
-                elif distances[-1] < beta_capture_radius:
-                    reward += 100 #50
-                elif distances[-1] < charlie_capture_radius:
-                    reward += 10
-                
-                elif distances[-1] < collision_radius:
-                    reward = -2000
+                if len(self.cca_history[i]) >= 2:
+                    prev_distance = np.linalg.norm(self.cca_history[i][-2] - self.foxtrot_position)
+                    current_distance = np.linalg.norm(pos - self.foxtrot_position)
+                    progress += (prev_distance - current_distance)
+            progress /= self.num_cca
+            reward += alpha * progress
 
-            reward = np.clip(reward, -2000, 2000)
+            # Energy Efficiency Penalty
+            energy_penalty = beta * np.sum([np.linalg.norm(action) for action in self.action_history[i][-1] for i in range(self.num_cca)])
+            reward -= energy_penalty
+
+            # Collision Penalty
+            collision_penalty = 0.0
+            for i, pos in enumerate(self.cca_positions):
+                distance = np.linalg.norm(pos - self.foxtrot_position)
+                if distance < self.collision_radius:
+                    collision_penalty += gamma_collision
+            reward += collision_penalty
+
+            # Optional: Exploration Bonus
+            # Encourage movement by rewarding the agent for covering more distance over time
+            movement_bonus = 0.0
+            for i, pos in enumerate(self.cca_positions):
+                total_movement = np.linalg.norm(pos - self.cca_history[i][0])
+                movement_bonus += 0.1 * total_movement  # Tunable parameter
+            reward += movement_bonus
+
+            # Clip reward to prevent extreme values
+            reward = np.clip(reward, gamma_collision, 2000)
 
             if REWARD_DEBUG:
-                print(f"Complex Reward: {reward}, Last Three Distances: {distances}")
+                print(f"Refactored Complex Reward: {reward}")
+                for i in range(self.num_cca):
+                    recent_distance = np.linalg.norm(self.cca_positions[i] - self.foxtrot_position)
+                    print(f"CCA {i} Distance: {recent_distance}")
 
             return reward
 
         elif globals.BASIC_REWARD:
-            # Basic reward logic
+            # Basic reward logic remains unchanged or can be similarly refactored
             reward = 0
             for i, pos in enumerate(self.cca_positions):
                 distance = np.linalg.norm(pos - self.foxtrot_position)
-                reward -= distance/100
+                reward -= distance / 100
 
             if REWARD_DEBUG:
                 print(f"Basic Reward is {reward}")
@@ -286,20 +322,21 @@ if __name__ == "__main__":
         return schedule
     
     # Initial Ciriculum Flags need to be set before env creation
-    globals.STATIONARY_FOXTROT = True
-    globals.RECTANGULAR_FOXTROT = False
+    globals.STATIONARY_FOXTROT = False
+    globals.RECTANGULAR_FOXTROT = True
     globals.COMPLEX_REWARD = True 
-    globals.RAND_POS = False #This is for stationary foxtrot & TODO: should be rewritten as so
-    globals.FIXED_POS = True
-    globals.RAND_FIXED_CCA = True
+    globals.RAND_POS = True #This is for stationary foxtrot & TODO: should be rewritten as so
+    globals.FIXED_POS = False
+    globals.RAND_FIXED_CCA = False
+    globals.PROXIMITY_CCA = True
 
 
     env = PPOEnv(grid_size=grid_size, num_cca=num_cca)
-    vec_env = DummyVecEnv([lambda: PPOEnv()])
+    vec_env = DummyVecEnv([lambda: env])
     vec_env = VecNormalize(vec_env, norm_obs=True, norm_reward=True)
     policy_kwargs = dict(
         features_extractor_class=Transformer,
-        features_extractor_kwargs=dict(embed_dim=72, num_heads=8, ff_hidden=72*5, num_layers=6, seq_len=6),
+        features_extractor_kwargs=dict(embed_dim=64, num_heads=8, ff_hidden=64*4, num_layers=4, seq_len=6),
         net_arch = dict(pi = [128,128,64],vf=[128,256,256,64]) #use keyword (pi) for policy network architecture -> additional ffn for decoding output, (vf) for reward func
     )
 
@@ -308,7 +345,7 @@ if __name__ == "__main__":
         policy_kwargs=policy_kwargs,
         env=vec_env,
         verbose=1,
-        normalize_advantage = False,
+        normalize_advantage = True,
         use_sde = False, # Essentially reducing delta of actions when rewards are very positive (breaks it while initially learning)
         #sde_sample_freq = 3,
         learning_rate=linear_schedule(initial_value= 0.00035),

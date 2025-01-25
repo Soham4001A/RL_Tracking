@@ -222,59 +222,90 @@ def foxtrot_movement_fn_cube(position, cube_state):
     return position
 
 class Transformer(BaseFeaturesExtractor):
-    def __init__(self, observation_space, embed_dim=64, num_heads=3, ff_hidden=128, num_layers=4, seq_len=6):
+    def __init__(
+        self,
+        observation_space,
+        embed_dim=64,
+        num_heads=3,
+        ff_hidden=128,
+        num_layers=4,
+        seq_len=6,
+        dropout=0.3
+    ):
+        """
+        :param observation_space: Gym observation space.
+        :param embed_dim: Size of the embedding (d_model) in the Transformer.
+        :param num_heads: Number of attention heads in the multi-head attention layers.
+        :param ff_hidden: Dimension of the feedforward network in the Transformer.
+        :param num_layers: Number of layers in the Transformer encoder.
+        :param seq_len: Number of time steps to unroll in the Transformer.
+        :param dropout: Dropout probability to use throughout the model.
+        """
+        # Features dimension after Transformer = embed_dim * seq_len
         feature_dim = embed_dim * seq_len
-        super(Transformer, self).__init__(
-            observation_space, features_dim=feature_dim
-        )
+        super(Transformer, self).__init__(observation_space, features_dim=feature_dim)
+
         self.embed_dim = embed_dim
         self.input_dim = observation_space.shape[0]
-        self.seq_len = seq_len  # Define seq_len explicitly
-        
-        # Validate that seq_len and embed_dim are compatible
+        self.seq_len = seq_len  
+        self.dropout_p = dropout
+
+        # Validate that seq_len divides input_dim evenly
         if self.input_dim % seq_len != 0:
             raise ValueError("Input dimension must be divisible by seq_len.")
-        
-        # Linear projection for input embedding
+
+        # Linear projection for input -> embedding
         self.input_embedding = nn.Linear(self.input_dim // seq_len, embed_dim)
-        
-        # Transformer encoder layers
+
+        # Dropout layer for embeddings
+        self.embedding_dropout = nn.Dropout(p=self.dropout_p)
+
+        # Transformer Encoder
+        #   - The 'dropout' parameter here applies to:
+        #       1) The self-attention mechanism outputs
+        #       2) The feed-forward sub-layer outputs
         self.encoder_layer = nn.TransformerEncoderLayer(
-            d_model=embed_dim, 
-            nhead=num_heads, 
-            dim_feedforward=ff_hidden, 
+            d_model=embed_dim,
+            nhead=num_heads,
+            dim_feedforward=ff_hidden,
+            dropout=self.dropout_p,
             batch_first=True
         )
         self.transformer = nn.TransformerEncoder(self.encoder_layer, num_layers=num_layers)
-        
-        # Flatten final output
+
+        # Flatten final output to feed into the policy & value networks
         self.flatten = nn.Flatten()
-    
+
     def forward(self, x):
-        # Reshape input into (sbatch_size, seq_len, features_per_seq)
+        # Reshape input into (batch_size, seq_len, features_per_seq)
         batch_size = x.shape[0]
         features_per_seq = self.input_dim // self.seq_len
         x = x.view(batch_size, self.seq_len, features_per_seq)
-        
-        # Project input to embedding space
+
+        # Linear projection
         x = self.input_embedding(x)
-        
-        # Add positional encoding (optional)
+
+        # Add positional encoding
         batch_size, seq_len, embed_dim = x.shape
         x = x + self._positional_encoding(seq_len, embed_dim).to(x.device)
-        
-        # Pass through transformer
+
+        # Drop out some embeddings for regularization
+        x = self.embedding_dropout(x)
+
+        # Pass sequence through the Transformer encoder
         x = self.transformer(x)
-        
-        # Flatten output
+
+        # Flatten for final feature vector
         return self.flatten(x)
-    
+
     def _positional_encoding(self, seq_len, embed_dim):
-        """
-        Generate positional encoding.
-        """
+        """Sine-cosine positional encoding, shape: (seq_len, embed_dim)."""
         position = torch.arange(0, seq_len, dtype=torch.float).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, embed_dim, 2).float() * (-np.log(10000.0) / embed_dim))
+        # The standard “div_term” for sine/cosine in attention
+        div_term = torch.exp(
+            torch.arange(0, embed_dim, 2).float()
+            * (-np.log(10000.0) / embed_dim)
+        )
         pe = torch.zeros(seq_len, embed_dim)
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)

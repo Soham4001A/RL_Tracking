@@ -69,6 +69,16 @@ class ShowcaseSimulation:
             ax.set_ylabel('Y-axis')
             ax.set_zlabel('Z-axis')
 
+            # Add sinusoidal orbiting effect
+            sin_amplitude = 20  # Amplitude of the sinusoidal movement
+            sin_frequency = 0.025  # Frequency of the sinusoidal movement
+
+            # Update axis view with sinusoidal movement
+            x_shift = sin_amplitude * np.sin(sin_frequency * frame)
+            y_shift = sin_amplitude * np.cos(sin_frequency * frame)
+
+            ax.view_init(elev=30 + x_shift, azim=frame * 0.5 + y_shift)
+
             for i in range(NUM_CCA):
                 if frame >= len(self.cca_positions) or i >= len(self.cca_positions[0]):
                     continue
@@ -91,7 +101,7 @@ class ShowcaseSimulation:
 
             if frame == 1:  # Just so the legend is not repeated every frame
                 ax.legend()
-
+            
         anim = FuncAnimation(fig, update, frames=self.steps, interval=50)
         plt.show()
 
@@ -110,6 +120,7 @@ if __name__ == "__main__":
     globals.FIXED_POS = False
     globals.RECTANGULAR_FOXTROT = True
     globals.RAND_FIXED_CCA = False
+    globals.PROXIMITY_CCA = True
 
     # Initialize environment with the updated flags
     base_env = PPOEnv(grid_size=globals.grid_size, num_cca=NUM_CCA)
