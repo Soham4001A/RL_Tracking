@@ -147,6 +147,9 @@ def foxtrot_movement_fn_cube(position, cube_state, terrain_fn):
         # Ensure float values for precise movements
         position = position.astype(float)
 
+        # Slowing Down Foxtrot to Half Speed
+        step_size = 5
+
         # Initialize cube_state if not already done
         if "phase" not in cube_state:
             cube_state["phase"] = "rectangle"

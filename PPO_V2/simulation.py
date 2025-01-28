@@ -4,7 +4,7 @@ from gymnasium.spaces import Box
 import numpy as np
 from math import pow
 from scipy.ndimage import gaussian_filter
-from stable_baselines3 import PPO
+from stable_baselines3 import PPO, GPRO
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 import os
 
@@ -387,10 +387,10 @@ class PPOEnv(gym.Env):
 
             # Hyperparameters
             alpha = 300.0  # Weight for progress toward the target
-            beta = 0.1    # Energy efficiency penalty weight
+            beta = 0.2    # Energy efficiency penalty weight
             gamma_collision = -1000.0  # Penalty for collisions
-            delta_z_penalty = -0.1     # Penalty for unnecessary vertical movement
-            gamma = 0.25    # Potential shaping weight
+            delta_z_penalty = -0.125     # Penalty for unnecessary vertical movement
+            gamma = 0.05    # Potential shaping weight
 
             # Define the potential function (distance to target)
             def potential():
@@ -430,7 +430,7 @@ class PPOEnv(gym.Env):
                     # Penalize if there’s terrain blocking the direct path and the robot doesn't move up
                     min_terrain_z = np.min(local_terrain[:, :, 2])
                     if pos[2] <= min_terrain_z:
-                        collision_penalty += gamma_collision * 0.5  # Reduced penalty for near misses
+                        collision_penalty += gamma_collision * 0.1  # Reduced penalty for near misses
 
             reward += collision_penalty
 
@@ -453,10 +453,10 @@ class PPOEnv(gym.Env):
                 # Reward meaningful z movement
                 if pos[2] > min_terrain_z and pos[2] < self.foxtrot_position[2]:
                     # Encourage moving up when below target z level
-                    reward += 0.1 * z_movement
+                    reward += 0.2 * z_movement
                 elif pos[2] < min_terrain_z:
                     # Encourage moving up to avoid terrain
-                    reward += 0.2 * z_movement
+                    reward += 0.7 * z_movement
                 else:
                     # Penalize redundant vertical movement
                     reward += delta_z_penalty * z_movement
@@ -469,7 +469,7 @@ class PPOEnv(gym.Env):
             reward += movement_bonus
 
             # Clip reward to prevent extreme values
-            reward = np.clip(reward, gamma_collision, 1500)
+            reward = np.clip(reward, -2500, 2500)
 
             if REWARD_DEBUG:
                 for i in range(self.num_cca):
@@ -524,17 +524,18 @@ if __name__ == "__main__":
         net_arch = dict(pi = [128,256,128],vf=[128,256,256,128]) #use keyword (pi) for policy network architecture -> additional ffn for decoding output, (vf) for reward func
     )
 
-    model = PPO(
+    model = GPRO(
         policy="MlpPolicy",
         policy_kwargs=policy_kwargs,
         env=vec_env,
         verbose=1,
+        samples_per_time_step= 5,
         normalize_advantage = True,
         use_sde = False, # Essentially reducing delta of actions when rewards are very positive (breaks it while initially learning)
         #sde_sample_freq = 3,
         learning_rate=linear_schedule(initial_value= 0.00035),
-        n_steps=3000, # Steps per learning update
-        batch_size=1000,
+        n_steps=300, # Steps per learning update
+        batch_size=100,
         gamma=0.9,
         gae_lambda= 0.85,
         vf_coef = 0.5,
@@ -554,15 +555,18 @@ if __name__ == "__main__":
     globals.RAND_POS = False #This is for stationary foxtrot & TODO: should be rewritten as so
     globals.FIXED_POS = True #This is for stationary foxtrot & TODO: should be rewritten as so
     globals.RAND_FIXED_CCA = True
-    model.learn(total_timesteps=70_000)
-
+    globals.PROXIMITY_CCA = False
+    globals.ENABLE_TERRAIN = True
+    model.learn(total_timesteps=60_000)
+    
     # Continutation but now CCA's are random spawn farther away
     globals.RECTANGULAR_FOXTROT = False
     globals.STATIONARY_FOXTROT = True
     globals.RAND_POS = False #This is for stationary foxtrot & TODO: should be rewritten as so
     globals.FIXED_POS = True #This is for stationary foxtrot & TODO: should be rewritten as so
     globals.RAND_FIXED_CCA = False
-    model.learn(total_timesteps=140_000)
+    globals.PROXIMITY_CCA = False
+    model.learn(total_timesteps=90_000)
 
     # Continue with random stationary foxtrot and random spawn CCA (maybed small gridsize too)
     globals.RECTANGULAR_FOXTROT = False
@@ -570,15 +574,17 @@ if __name__ == "__main__":
     globals.FIXED_POS = False #This is for stationary foxtrot & TODO: should be rewritten as so
     globals.RAND_POS = True #This is for stationary foxtrot & TODO: should be rewritten as so
     globals.RAND_FIXED_CCA = False
-    model.learn(total_timesteps=350_000) 
+    globals.PROXIMITY_CCA = False
+    globals.ENABLE_TERRAIN = True
+    model.learn(total_timesteps=210_000) 
     
-    """
+    """   
     # Finally, train it to follow a movement function - spawn CCA's at same location as foxtrot initially
     globals.STATIONARY_FOXTROT = False
     globals.RECTANGULAR_FOXTROT = True
     globals.RAND_FIXED_CCA = False
     globals.PROXIMITY_CCA = True
-    model.learn(total_timesteps=600_000)
+    model.learn(total_timesteps=99_000)
 
     # Save the model
     model.save("./PPO_V2/Trained_Model")
