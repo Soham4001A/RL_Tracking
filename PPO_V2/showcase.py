@@ -144,7 +144,7 @@ if __name__ == "__main__":
     globals.FIXED_POS = False
     globals.RECTANGULAR_FOXTROT = True
     globals.RAND_FIXED_CCA = False
-    globals.PROXIMITY_CCA = False
+    globals.PROXIMITY_CCA = True
     globals.ENABLE_TERRAIN = True
 
     # Initialize environment with the updated flags
