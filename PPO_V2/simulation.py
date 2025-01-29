@@ -4,7 +4,7 @@ from gymnasium.spaces import Box
 import numpy as np
 from math import pow
 from scipy.ndimage import gaussian_filter
-from stable_baselines3 import PPO, GPRO
+from stable_baselines3 import PPO, GRPO
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 import os
 
@@ -24,7 +24,7 @@ class PPOEnv(gym.Env):
         self.num_cca = num_cca
 
         # ------------------------------
-        # GPRO-related parameters
+        # GRPO-related parameters
         # ------------------------------
         self.sub_step_count = 0  # tracks how many sub-steps have occurred in the current macro-step
         # ------------------------------
@@ -213,7 +213,7 @@ class PPOEnv(gym.Env):
         return obs, {}
 
     def step(self, actions):
-        """Perform multi-action sampling for GPRO, scaling rewards without altering the initial state."""
+        """Perform multi-action sampling for GRPO, scaling rewards without altering the initial state."""
 
         # Convert actions to (num_cca, 3) if needed
         actions = np.array(actions, dtype=np.float32)
@@ -478,7 +478,7 @@ if __name__ == "__main__":
         net_arch = dict(pi = [128,128,64],vf=[128,256,256,64]) #use keyword (pi) for policy network architecture -> additional ffn for decoding output, (vf) for reward func
     )
 
-    model = GPRO(
+    model = GRPO(
         policy="MlpPolicy",
         policy_kwargs=policy_kwargs,
         env=vec_env,
