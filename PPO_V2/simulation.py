@@ -18,7 +18,7 @@ POSITIONAL_DEBUG = True
 class PPOEnv(gym.Env):
     """Custom Env that supports sub-step logic for GPRO."""
 
-    def __init__(self, grid_size=500, num_cca=1, samples_per_time_step=5):
+    def __init__(self, grid_size=500, num_cca=1):
         super(PPOEnv, self).__init__()
         self.grid_size = grid_size
         self.num_cca = num_cca
@@ -26,12 +26,11 @@ class PPOEnv(gym.Env):
         # ------------------------------
         # GPRO-related parameters
         # ------------------------------
-        self.samples_per_time_step = samples_per_time_step  # same number used in GPRO
         self.sub_step_count = 0  # tracks how many sub-steps have occurred in the current macro-step
         # ------------------------------
 
         self.current_step = 0
-        self.max_steps = 500  # The "macro-step" horizon
+        self.max_steps = 400  # The "macro-step" horizon
         self.cube_state = {}
 
         # Reward Function Utils
@@ -157,6 +156,9 @@ class PPOEnv(gym.Env):
 
     def step(self, actions):
         """Perform one sub-step, accumulate reward, but only increment the major step after enough sub-steps."""
+
+        self.current_step += 1
+
         # Convert actions to (num_cca, 3) if needed
         actions = np.array(actions, dtype=np.float32)
         if actions.ndim == 1 and actions.size == self.num_cca * 3:
@@ -188,30 +190,11 @@ class PPOEnv(gym.Env):
         self.foxtrot_history = np.roll(self.foxtrot_history, shift=-1, axis=0)
         self.foxtrot_history[-1] = self.foxtrot_position
 
-        # ---------------------------------------------------
-        # Sub-step logic: only increment macro-step after
-        # we have done 'samples_per_time_step' sub-steps.
-        # ---------------------------------------------------
-        self.sub_step_count += 1
-
         done = False
         truncated = False
 
-        # You can do immediate checks for collisions if you prefer:
-        # e.g., if a collision occurs, end the episode right away
-        # collision_condition = ...
-        # if collision_condition:
-        #     done = True
-
-        # If we've completed all sub-steps, do the "macro-step" increment.
-        if self.sub_step_count >= self.samples_per_time_step:
-            self.sub_step_count = 0
-            self.current_step += 1
-
-            # Now check time-limit or success
-            truncated = (self.current_step >= self.max_steps)
-            # done = truncated or (any success condition)
-            done = truncated  # or collision_condition or success_condition
+        if self.current_step == self.max_steps:
+            done = truncated = True
 
         # Return the standard Gymnasium tuple
         obs = self._get_observation()
@@ -245,6 +228,7 @@ class PPOEnv(gym.Env):
             gamma_collision = -2000.0  # Penalty for collisions
             gamma = 0.1                # Potential shaping weight
             max_action_norm = 10.0     # Maximum expected action magnitude
+            capture_radius = 15
 
             # Define the potential function
             def potential():
@@ -269,6 +253,10 @@ class PPOEnv(gym.Env):
                     prev_distance = np.linalg.norm(self.cca_history[i][-2] - self.foxtrot_position)
                     current_distance = np.linalg.norm(pos - self.foxtrot_position)
                     progress += (prev_distance - current_distance)
+
+                    if current_distance < capture_radius: #capture radius bonus
+                        reward += 1000
+
             progress /= self.num_cca
             reward += alpha * progress
 
@@ -299,7 +287,7 @@ class PPOEnv(gym.Env):
                 #print(f"Refactored Complex Reward: {reward}")
                 for i in range(self.num_cca):
                     recent_distance = np.linalg.norm(self.cca_positions[i] - self.foxtrot_position)
-                    print(f"Refactored Complex Reward: {reward}, CCA {i} Distance: {recent_distance}")
+                    print(f"Raw Complex Reward: {reward}, CCA {i} Distance: {recent_distance}")
 
             return reward
 
@@ -338,9 +326,7 @@ if __name__ == "__main__":
     globals.RAND_FIXED_CCA = False
     globals.PROXIMITY_CCA = True
 
-    sample_frequency = 5
-
-    env = PPOEnv(grid_size=500, num_cca=1, samples_per_time_step=sample_frequency) 
+    env = PPOEnv(grid_size=500, num_cca=1) 
     vec_env = DummyVecEnv([lambda: env])
     vec_env = VecNormalize(vec_env, norm_obs=True, norm_reward=True)
     policy_kwargs = dict(
@@ -357,13 +343,13 @@ if __name__ == "__main__":
         normalize_advantage = True,
         use_sde = False, # Essentially reducing delta of actions when rewards are very positive (breaks it while initially learning)
         #sde_sample_freq = 3,
-        learning_rate=linear_schedule(initial_value= 0.00035),
-        samples_per_time_step= sample_frequency,
-        n_steps=1000, # Steps per learning update
-        batch_size=500,
-        gamma=0.9,
-        gae_lambda= 0.85,
-        vf_coef = 0.5,
+        learning_rate=linear_schedule(initial_value= 0.0002),
+        samples_per_time_step= 5,
+        n_steps=600, # Steps per learning update
+        batch_size=100,
+        gamma=0.85,
+        gae_lambda= 0.8,
+        vf_coef = 0.85, # Lower reliance on v(s) to compute advantage which is then used to compute Loss -> Gradient
         clip_range=0.4, # Clips larger updates to remain within +- 60%
         #ent_coef=0.05,
         #tensorboard_log="./Patrol&Proetect_PPO/ppo_patrol_tensorboard/"
@@ -405,6 +391,9 @@ if __name__ == "__main__":
     globals.RAND_FIXED_CCA = False
     globals.PROXIMITY_CCA = True
     model.learn(total_timesteps=60_000)
+
+    globals.PROXIMITY_CCA = False
+    model.learn(total_timesteps=30_000)
 
     # Save the model
     model.save("./PPO_V2/Trained_Model")
