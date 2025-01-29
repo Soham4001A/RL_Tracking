@@ -390,10 +390,10 @@ if __name__ == "__main__":
     globals.RECTANGULAR_FOXTROT = True
     globals.RAND_FIXED_CCA = False
     globals.PROXIMITY_CCA = True
-    model.learn(total_timesteps=60_000)
+    model.learn(total_timesteps=90_000)
 
     globals.PROXIMITY_CCA = False
-    model.learn(total_timesteps=30_000)
+    model.learn(total_timesteps=90_000)
 
     # Save the model
     model.save("./PPO_V2/Trained_Model")
