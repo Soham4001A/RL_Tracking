@@ -18,26 +18,26 @@ POSITIONAL_DEBUG = True
 
 class PPOEnv(gym.Env):
     """Custom PPO Environment for controlling CCA objects."""
-    def __init__(self, grid_size=500, num_cca=1, samples_per_time_step=5):
+    def __init__(self, grid_size=500, num_cca=1):
         super(PPOEnv, self).__init__()
         self.grid_size = grid_size
         self.num_cca = num_cca
-        self.samples_per_time_step = samples_per_time_step  # NEW for GPRO
-        self.current_step = 0
-        self.max_steps = 500  # Episode Length
-        self.cube_state = {}
 
-        # Reward Function Utils
-        self.capture_radius = globals.step_size
-        self.collision_radius = 1
-        self.alpha_capture_radius = 20
-        self.beta_capture_radius = 50
-        self.charlie_capture_radius = 75
+        # ------------------------------
+        # GPRO-related parameters
+        # ------------------------------
+        self.sub_step_count = 0  # tracks how many sub-steps have occurred in the current macro-step
+        # ------------------------------
+
+        self.current_step = 0
+        self.max_steps = 400  # The "macro-step" horizon
+        self.cube_state = {}
 
         # Terrain Utils
         self.terrain_map = None  # Will be generated if ENABLE_TERRAIN
         self.block_size = 50  # used by _generate_terrain
         self.terrain_collision_counter = 0
+        self.collision_radius = 1
 
         # Create terrain only if enabled
         if globals.ENABLE_TERRAIN:
@@ -66,10 +66,6 @@ class PPOEnv(gym.Env):
             low=0, high=self.grid_size, shape=(obs_shape,), dtype=np.float32
         )
 
-        # Initialize Buffers for Multi-Step Sampling
-        self.sub_rewards = np.zeros((self.samples_per_time_step, self.num_cca))
-        self.sub_actions = np.zeros((self.samples_per_time_step, self.num_cca, 3))
-
         # Initialize Foxtrot positions
         if globals.RAND_POS:
             self.foxtrot_position = np.random.randint(200, 301, size=3)
@@ -96,7 +92,7 @@ class PPOEnv(gym.Env):
         self.action_history = [np.zeros((6, 3), dtype=np.float32) for _ in range(self.num_cca)]  # 6 time steps of actions per CCA
         self.cca_history = [np.tile(pos, (6, 1)) for pos in self.cca_positions]
         self.foxtrot_history = np.tile(self.foxtrot_position, (6, 1))  # 6 rows for 5 past + current position
-        self.terrain_history = [np.zeros((6, 5, 5, 3), dtype=np.float32) for _ in range(self.num_cca)]
+        self.terrain_history = [np.zeros((6, 5, 5, 3), dtype=np.float32) for _ in range(self.num_cca)] # Terrain History
 
         
     def reset(self, seed=None, **kwargs):
@@ -105,9 +101,7 @@ class PPOEnv(gym.Env):
 
         self.cube_state = {}
         self.current_step = 0
-        # Reset sub-step buffers
-        self.sub_rewards.fill(0)
-        self.sub_actions.fill(0)
+        self.sub_step_count = 0  # Reset sub-step count too
 
         self.action_history = [np.zeros((6, 3), dtype=np.float32) for _ in range(self.num_cca)]  # 6 time steps of actions per CCA
         self.cca_history = [np.tile(pos, (6, 1)) for pos in self.cca_positions]
@@ -216,11 +210,11 @@ class PPOEnv(gym.Env):
                 print(f"CCA {i} spawned at {pos}")
                 
         obs = self._get_observation()
-        info = {}  # Add an empty dictionary for compatibility
-        return obs, info
+        return obs, {}
 
     def step(self, actions):
         """Perform multi-action sampling for GPRO, scaling rewards without altering the initial state."""
+
         # Convert actions to (num_cca, 3) if needed
         actions = np.array(actions, dtype=np.float32)
         if actions.ndim == 1 and actions.size == self.num_cca * 3:
@@ -230,54 +224,43 @@ class PPOEnv(gym.Env):
         else:
             raise ValueError(f"Unexpected action shape: {actions.shape}")
 
-        # Save the initial state to reset for each sub-step
-        initial_cca_positions = np.copy(self.cca_positions)
-        initial_foxtrot_position = np.copy(self.foxtrot_position)
-        initial_action_history = [np.copy(hist) for hist in self.action_history]
-        initial_cca_history = [np.copy(hist) for hist in self.cca_history]
-        initial_foxtrot_history = np.copy(self.foxtrot_history)
+        for i, action in enumerate(actions):
+            self.action_history[i] = np.roll(self.action_history[i], shift=-1, axis=0)
+            self.action_history[i][-1] = action
+            movement_vector = self._decode_action(action)
+            self.cca_positions[i] += movement_vector.astype(int)
+            self.cca_positions[i] = np.clip(self.cca_positions[i], 0, self.grid_size - 1)
+            
+            self.terrain_history[i] = np.roll(self.terrain_history[i], shift=-1, axis=0)
+            self.terrain_history[i][-1] = self._get_local_terrain_matrix(
+                int(self.cca_positions[i][0]), int(self.cca_positions[i][1])
+            )
 
-        sub_rewards = []
-        for sub_step in range(self.samples_per_time_step):
-            # Apply the action for this sub-step
-            for i, action in enumerate(actions):
-                self.action_history[i] = np.roll(self.action_history[i], shift=-1, axis=0)
-                self.action_history[i][-1] = action
-                movement_vector = self._decode_action(action)
-                self.cca_positions[i] += movement_vector.astype(int)
-                self.cca_positions[i] = np.clip(self.cca_positions[i], 0, self.grid_size - 1)
+        # Calculate Reward
+        reward = self._calculate_reward()
 
-                if globals.RECTANGULAR_FOXTROT:
-                    self.foxtrot_position = foxtrot_movement_fn_cube(self.foxtrot_position, self.cube_state, self._terrain_z_at)
-                    self.foxtrot_position = np.clip(self.foxtrot_position, 0, self.grid_size - 1)
+        if globals.RECTANGULAR_FOXTROT:
+            self.foxtrot_position = foxtrot_movement_fn_cube(self.foxtrot_position, self.cube_state, self._terrain_z_at)
+            self.foxtrot_position = np.clip(self.foxtrot_position, 0, self.grid_size - 1)
 
-                self.foxtrot_history = np.roll(self.foxtrot_history, shift=-1, axis=0)
-                self.foxtrot_history[-1] = self.foxtrot_position
+        self.foxtrot_history = np.roll(self.foxtrot_history, shift=-1, axis=0)
+        self.foxtrot_history[-1] = self.foxtrot_position
 
-                self.cca_history[i] = np.roll(self.cca_history[i], shift=-1, axis=0)
-                self.cca_history[i][-1] = self.cca_positions[i]
+        self.cca_history[i] = np.roll(self.cca_history[i], shift=-1, axis=0)
+        self.cca_history[i][-1] = self.cca_positions[i]
 
-            # Calculate reward for this sub-step
-            reward = self._calculate_reward()
-            sub_rewards.append(reward)
 
-            # Reset the environment to the initial state for the next sub-step
-            self.cca_positions = np.copy(initial_cca_positions)
-            self.foxtrot_position = np.copy(initial_foxtrot_position)
-            self.action_history = [np.copy(hist) for hist in initial_action_history]
-            self.cca_history = [np.copy(hist) for hist in initial_cca_history]
-            self.foxtrot_history = np.copy(initial_foxtrot_history)
+        done = False
+        truncated = False
 
-        # Aggregate rewards across sub-steps (e.g., mean, sum, or scaled rewards)
-        scaled_rewards = self._gpro_scale_rewards(np.array(sub_rewards))
-
-        # Increment macro-step and update state permanently
         self.current_step += 1
-        truncated = self.current_step >= self.max_steps
+        if self.current_step == self.max_steps:
+            done = truncated = True
 
-        # Return the aggregated observation, scaled rewards, and macro-step status
+        # Return the standard Gymnasium tuple
         obs = self._get_observation()
-        return obs, scaled_rewards, False, truncated, {}
+        info = {}
+        return obs, reward, done, truncated, info
 
     # ---------------------------
     # TERRAIN GENERATION
@@ -376,118 +359,95 @@ class PPOEnv(gym.Env):
 
     def _calculate_reward(self):
         """
-        Improved reward function for smarter terrain navigation.
+        Refactored reward function using potential-based reward shaping and multi-objective optimization.
         """
         if globals.COMPLEX_REWARD:
+            # Initialize reward
             reward = 0.0
 
             # Hyperparameters
-            alpha = 300.0  # Weight for progress toward the target
-            beta = 0.2    # Energy efficiency penalty weight
-            gamma_collision = -1000.0  # Penalty for collisions
-            delta_z_penalty = -0.125     # Penalty for unnecessary vertical movement
-            gamma = 0.05    # Potential shaping weight
+            alpha = 300.0              # Weight for progress
+            beta = 0.05                # Weight for energy efficiency
+            gamma_collision = -2000.0  # Penalty for collisions
+            gamma = 0.1                # Potential shaping weight
+            max_action_norm = 10.0     # Maximum expected action magnitude
+            capture_radius = 15
 
-            # Define the potential function (distance to target)
+            # Define the potential function
             def potential():
                 return -np.mean([np.linalg.norm(pos - self.foxtrot_position) for pos in self.cca_positions])
 
-            # Current and previous potential for shaping
+            # Current and previous potential
             current_potential = potential()
             previous_potential = getattr(self, 'previous_potential', current_potential)
+
+            # Potential-based shaping
             shaped_reward = gamma * (current_potential - previous_potential)
             reward += shaped_reward
+
+            # Update previous potential for next step
             self.previous_potential = current_potential
 
-            # Progress toward the target
+            # Progress-Based Reward
+            # Calculate average progress across all CCAs
             progress = 0.0
             for i, pos in enumerate(self.cca_positions):
-                prev_distance = np.linalg.norm(self.cca_history[i][-2] - self.foxtrot_position)
-                current_distance = np.linalg.norm(pos - self.foxtrot_position)
-                progress += (prev_distance - current_distance)
+                if len(self.cca_history[i]) >= 2:
+                    prev_distance = np.linalg.norm(self.cca_history[i][-2] - self.foxtrot_position)
+                    current_distance = np.linalg.norm(pos - self.foxtrot_position)
+                    progress += (prev_distance - current_distance)
+
+                    if current_distance < capture_radius: #capture radius bonus
+                        reward += 1000
+
             progress /= self.num_cca
             reward += alpha * progress
 
-            # Terrain awareness and collision penalty
+            # Energy Efficiency Penalty
+            energy_penalty = beta * np.sum([np.linalg.norm(action) for action in self.action_history[i][-1] for i in range(self.num_cca)])
+            reward -= energy_penalty
+
+            # Collision Penalty
             collision_penalty = 0.0
             for i, pos in enumerate(self.cca_positions):
                 distance = np.linalg.norm(pos - self.foxtrot_position)
-
-                # Collision with terrain
-                terrain_z = self._terrain_z_at(int(pos[0]), int(pos[1]))
-                if pos[2] < terrain_z:
+                if distance < self.collision_radius:
                     collision_penalty += gamma_collision
-
-                # Encourage avoiding terrain in the local map
-                local_terrain = self._get_local_terrain_matrix(
-                    int(pos[0]), int(pos[1])
-                ).reshape(5, 5, 3)
-                if np.any(local_terrain[:, :, 2] > pos[2]):
-                    # Penalize if there’s terrain blocking the direct path and the robot doesn't move up
-                    min_terrain_z = np.min(local_terrain[:, :, 2])
-                    if pos[2] <= min_terrain_z:
-                        collision_penalty += gamma_collision * 0.1  # Reduced penalty for near misses
-
             reward += collision_penalty
 
-            # Energy efficiency penalty
-            energy_penalty = beta * np.sum(
-                [np.linalg.norm(action) for action in self.action_history[i][-1] for i in range(self.num_cca)]
-            )
-            reward -= energy_penalty
-
-            # Vertical movement handling
-            for i, pos in enumerate(self.cca_positions):
-                z_movement = np.abs(self.action_history[i][-1][2])
-
-                # Get terrain information
-                local_terrain = self._get_local_terrain_matrix(
-                    int(pos[0]), int(pos[1])
-                ).reshape(5, 5, 3)
-                min_terrain_z = np.min(local_terrain[:, :, 2])
-
-                # Reward meaningful z movement
-                if pos[2] > min_terrain_z and pos[2] < self.foxtrot_position[2]:
-                    # Encourage moving up when below target z level
-                    reward += 0.2 * z_movement
-                elif pos[2] < min_terrain_z:
-                    # Encourage moving up to avoid terrain
-                    reward += 0.7 * z_movement
-                else:
-                    # Penalize redundant vertical movement
-                    reward += delta_z_penalty * z_movement
-
-            # Exploration bonus (optional)
+            # Optional: Exploration Bonus
+            # Encourage movement by rewarding the agent for covering more distance over time
             movement_bonus = 0.0
             for i, pos in enumerate(self.cca_positions):
                 total_movement = np.linalg.norm(pos - self.cca_history[i][0])
-                movement_bonus += 0.025 * total_movement  # Tunable parameter
+                movement_bonus += 0.1 * total_movement  # Tunable parameter
             reward += movement_bonus
 
             # Clip reward to prevent extreme values
-            reward = np.clip(reward, -2500, 2500)
+            reward = np.clip(reward, gamma_collision, 2000)
 
             if REWARD_DEBUG:
+                #print(f"Refactored Complex Reward: {reward}")
                 for i in range(self.num_cca):
                     recent_distance = np.linalg.norm(self.cca_positions[i] - self.foxtrot_position)
-                    print(f"Reward: {reward}, CCA {i} Distance: {recent_distance}")
+                    print(f"Raw Complex Reward: {reward}, CCA {i} Distance: {recent_distance}")
 
             return reward
 
         elif globals.BASIC_REWARD:
+            # Basic reward logic remains unchanged or can be similarly refactored
             reward = 0
             for i, pos in enumerate(self.cca_positions):
                 distance = np.linalg.norm(pos - self.foxtrot_position)
                 reward -= distance / 100
 
             if REWARD_DEBUG:
-                print(f"Basic Reward: {reward}")
+                print(f"Basic Reward is {reward}")
 
             return reward
 
         else:
             raise ValueError("No reward flag set! Set COMPLEX_REWARD or BASIC_REWARD to True.")
-
 
 if __name__ == "__main__":
 
@@ -508,16 +468,14 @@ if __name__ == "__main__":
     globals.FIXED_POS = False
     globals.RAND_FIXED_CCA = False
     globals.PROXIMITY_CCA = True
-    globals.ENABLE_TERRAIN = True
 
-
-    env = PPOEnv(grid_size=grid_size, num_cca=num_cca)
+    env = PPOEnv(grid_size=500, num_cca=1) 
     vec_env = DummyVecEnv([lambda: env])
     vec_env = VecNormalize(vec_env, norm_obs=True, norm_reward=True)
     policy_kwargs = dict(
         features_extractor_class=Transformer,
-        features_extractor_kwargs=dict(embed_dim=128, num_heads=8, ff_hidden=128*4, num_layers=4, seq_len=6),
-        net_arch = dict(pi = [128,256,128],vf=[128,256,256,128]) #use keyword (pi) for policy network architecture -> additional ffn for decoding output, (vf) for reward func
+        features_extractor_kwargs=dict(embed_dim=64, num_heads=8, ff_hidden=64*4, num_layers=4, seq_len=6),
+        net_arch = dict(pi = [128,128,64],vf=[128,256,256,64]) #use keyword (pi) for policy network architecture -> additional ffn for decoding output, (vf) for reward func
     )
 
     model = GPRO(
@@ -525,19 +483,19 @@ if __name__ == "__main__":
         policy_kwargs=policy_kwargs,
         env=vec_env,
         verbose=1,
-        samples_per_time_step= 5,
         normalize_advantage = True,
         use_sde = False, # Essentially reducing delta of actions when rewards are very positive (breaks it while initially learning)
         #sde_sample_freq = 3,
-        learning_rate=linear_schedule(initial_value= 0.00035),
-        n_steps=1000, # Steps per learning update
-        batch_size=500,
-        gamma=0.9,
-        gae_lambda= 0.85,
-        vf_coef = 0.5,
+        learning_rate=linear_schedule(initial_value= 0.0002),
+        samples_per_time_step= 5,
+        n_steps=600, # Steps per learning update
+        batch_size=100,
+        gamma=0.85,
+        gae_lambda= 0.8,
+        vf_coef = 0.85, # Lower reliance on v(s) to compute advantage which is then used to compute Loss -> Gradient
         clip_range=0.4, # Clips larger updates to remain within +- 60%
         #ent_coef=0.05,
-        tensorboard_log="./PPO_V2/ppo_patrol_tensorboard/"
+        #tensorboard_log="./Patrol&Proetect_PPO/ppo_patrol_tensorboard/"
     )
 
     # Cirriculum Learning
@@ -551,18 +509,15 @@ if __name__ == "__main__":
     globals.RAND_POS = False #This is for stationary foxtrot & TODO: should be rewritten as so
     globals.FIXED_POS = True #This is for stationary foxtrot & TODO: should be rewritten as so
     globals.RAND_FIXED_CCA = True
-    globals.PROXIMITY_CCA = False
-    globals.ENABLE_TERRAIN = True
-    model.learn(total_timesteps=60_000)
-    
+    model.learn(total_timesteps=70_000)
+
     # Continutation but now CCA's are random spawn farther away
     globals.RECTANGULAR_FOXTROT = False
     globals.STATIONARY_FOXTROT = True
     globals.RAND_POS = False #This is for stationary foxtrot & TODO: should be rewritten as so
     globals.FIXED_POS = True #This is for stationary foxtrot & TODO: should be rewritten as so
     globals.RAND_FIXED_CCA = False
-    globals.PROXIMITY_CCA = False
-    model.learn(total_timesteps=90_000)
+    model.learn(total_timesteps=140_000)
 
     # Continue with random stationary foxtrot and random spawn CCA (maybed small gridsize too)
     globals.RECTANGULAR_FOXTROT = False
@@ -570,17 +525,18 @@ if __name__ == "__main__":
     globals.FIXED_POS = False #This is for stationary foxtrot & TODO: should be rewritten as so
     globals.RAND_POS = True #This is for stationary foxtrot & TODO: should be rewritten as so
     globals.RAND_FIXED_CCA = False
-    globals.PROXIMITY_CCA = False
-    globals.ENABLE_TERRAIN = True
-    model.learn(total_timesteps=210_000) 
+    model.learn(total_timesteps=350_000) 
     
-    """   
+    """
     # Finally, train it to follow a movement function - spawn CCA's at same location as foxtrot initially
     globals.STATIONARY_FOXTROT = False
     globals.RECTANGULAR_FOXTROT = True
     globals.RAND_FIXED_CCA = False
     globals.PROXIMITY_CCA = True
-    model.learn(total_timesteps=99_000)
+    model.learn(total_timesteps=90_000)
+
+    globals.PROXIMITY_CCA = False
+    model.learn(total_timesteps=90_000)
 
     # Save the model
     model.save("./PPO_V2/Trained_Model")
