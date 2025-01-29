@@ -5,7 +5,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 from matplotlib.animation import FuncAnimation
-from stable_baselines3 import PPO
+from stable_baselines3 import PPO,GPRO
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
 # Visualization parameters
@@ -14,16 +14,16 @@ STEPS = 10000
 
 class ShowcaseSimulation:
     def __init__(self, model_path, vec_env, steps):
-        self.model = PPO.load(model_path, env = vec_env)
+        self.model = GPRO.load(model_path, env=vec_env)
         self.env = vec_env
         self.steps = steps
         self.cca_positions = []
         self.foxtrot_positions = []
 
-        # Initially, we do NOT grab the terrain map here,
+        # Terrain and grid-related variables
         self.terrain_map = None
         self.grid_size = globals.grid_size
-        self.block_size = 50  # This is used for terrain discretization
+        self.block_size = 50  # Terrain discretization
         self.x_blocks = None
         self.y_blocks = None
 
@@ -31,13 +31,13 @@ class ShowcaseSimulation:
         """Run the simulation and collect positions for visualization."""
         obs = self.env.reset()
 
-        # Right after reset, the environment re-generated the terrain.
         if globals.ENABLE_TERRAIN:
             self.terrain_map = self.env.get_attr('terrain_map')[0]
             self.x_blocks = self.terrain_map.shape[0]
             self.y_blocks = self.terrain_map.shape[1]
 
         for _ in range(self.steps):
+            
             # Get the action from the trained model
             action, _ = self.model.predict(obs)
 
@@ -46,19 +46,17 @@ class ShowcaseSimulation:
 
             # Store positions for visualization
             self.cca_positions.append(
-                np.array([np.array(pos) for pos in self.env.get_attr('cca_positions')[0]], dtype=float)
+                np.array(self.env.get_attr('cca_positions')[0], dtype=float)
             )
             self.foxtrot_positions.append(
                 np.array(self.env.get_attr('foxtrot_position')[0], dtype=float)
             )
 
-            terminated = truncated = False #This is wrong. It's happening because terminated is being set to done success at end of each training episode
+            terminated = truncated = False #known bug
 
-            if truncated:
-                print("Episode Truncated (Non-natural endpoint (hard-stopped))")
-            
-            if terminated:
-                print("Episode Terminated (Natural endpoint (Objective Achieved))")
+            if terminated or truncated:
+                print(f"Episode ended: {'Terminated' if terminated else 'Truncated'}")
+                break
 
     def visualize(self):
         """Visualize the simulation results."""
@@ -146,7 +144,7 @@ if __name__ == "__main__":
     globals.FIXED_POS = False
     globals.RECTANGULAR_FOXTROT = True
     globals.RAND_FIXED_CCA = False
-    globals.PROXIMITY_CCA = True
+    globals.PROXIMITY_CCA = False
     globals.ENABLE_TERRAIN = True
 
     # Initialize environment with the updated flags

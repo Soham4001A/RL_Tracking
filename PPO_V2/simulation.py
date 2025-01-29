@@ -18,12 +18,13 @@ POSITIONAL_DEBUG = True
 
 class PPOEnv(gym.Env):
     """Custom PPO Environment for controlling CCA objects."""
-    def __init__(self, grid_size=500, num_cca=1):
+    def __init__(self, grid_size=500, num_cca=1, samples_per_time_step=5):
         super(PPOEnv, self).__init__()
         self.grid_size = grid_size
         self.num_cca = num_cca
+        self.samples_per_time_step = samples_per_time_step  # NEW for GPRO
         self.current_step = 0
-        self.max_steps = 500 # Epsiode Length in the simulation
+        self.max_steps = 500  # Episode Length
         self.cube_state = {}
 
         # Reward Function Utils
@@ -49,13 +50,12 @@ class PPOEnv(gym.Env):
         # ACTION SPACE
         # ---------------------------
         self.action_space = spaces.Box(
-            low=-step_size, high=step_size, shape=(self.num_cca, 3), dtype=np.float32
+            low=-globals.step_size, high=globals.step_size, shape=(self.num_cca, 3), dtype=np.float32
         )
 
         # ---------------------------
         # OBSERVATION SPACE
         # ---------------------------
-        # Update observation space
         obs_shape = (
             6 * (3 * self.num_cca + 3 + 3 * self.num_cca)  # Positions, actions
             + 6 * 5 * 5 * 3  # Local terrain map history
@@ -65,6 +65,10 @@ class PPOEnv(gym.Env):
         self.observation_space = spaces.Box(
             low=0, high=self.grid_size, shape=(obs_shape,), dtype=np.float32
         )
+
+        # Initialize Buffers for Multi-Step Sampling
+        self.sub_rewards = np.zeros((self.samples_per_time_step, self.num_cca))
+        self.sub_actions = np.zeros((self.samples_per_time_step, self.num_cca, 3))
 
         # Initialize Foxtrot positions
         if globals.RAND_POS:
@@ -101,6 +105,9 @@ class PPOEnv(gym.Env):
 
         self.cube_state = {}
         self.current_step = 0
+        # Reset sub-step buffers
+        self.sub_rewards.fill(0)
+        self.sub_actions.fill(0)
 
         self.action_history = [np.zeros((6, 3), dtype=np.float32) for _ in range(self.num_cca)]  # 6 time steps of actions per CCA
         self.cca_history = [np.tile(pos, (6, 1)) for pos in self.cca_positions]
@@ -213,75 +220,64 @@ class PPOEnv(gym.Env):
         return obs, info
 
     def step(self, actions):
-        # Convert actions to a NumPy array in case it's not already
+        """Perform multi-action sampling for GPRO, scaling rewards without altering the initial state."""
+        # Convert actions to (num_cca, 3) if needed
         actions = np.array(actions, dtype=np.float32)
-
-        # If the shape is (num_cca * 3,), reshape to (num_cca, 3)
-        # This ensures we handle both the single- and multi-CCA cases correctly
         if actions.ndim == 1 and actions.size == self.num_cca * 3:
             actions = actions.reshape(self.num_cca, 3)
         elif actions.ndim == 2:
-            # Already shaped (num_cca, 3); no change needed
-            pass
+            pass  # Already correct shape
         else:
             raise ValueError(f"Unexpected action shape: {actions.shape}")
 
-        # Now 'actions' has shape (num_cca, 3), so your loop works as intended
-        # Update action history for each CCA
-        for i, action in enumerate(actions):
-            self.action_history[i] = np.roll(self.action_history[i], shift=-1, axis=0)
-            self.action_history[i][-1] = action
-            movement_vector = self._decode_action(action)
-            self.cca_positions[i] += movement_vector.astype(int)
-            self.cca_positions[i] = np.clip(self.cca_positions[i], 0, self.grid_size - 1)
+        # Save the initial state to reset for each sub-step
+        initial_cca_positions = np.copy(self.cca_positions)
+        initial_foxtrot_position = np.copy(self.foxtrot_position)
+        initial_action_history = [np.copy(hist) for hist in self.action_history]
+        initial_cca_history = [np.copy(hist) for hist in self.cca_history]
+        initial_foxtrot_history = np.copy(self.foxtrot_history)
 
-            # Update CCA history
-            self.cca_history[i] = np.roll(self.cca_history[i], shift=-1, axis=0)
-            self.cca_history[i][-1] = self.cca_positions[i]
+        sub_rewards = []
+        for sub_step in range(self.samples_per_time_step):
+            # Apply the action for this sub-step
+            for i, action in enumerate(actions):
+                self.action_history[i] = np.roll(self.action_history[i], shift=-1, axis=0)
+                self.action_history[i][-1] = action
+                movement_vector = self._decode_action(action)
+                self.cca_positions[i] += movement_vector.astype(int)
+                self.cca_positions[i] = np.clip(self.cca_positions[i], 0, self.grid_size - 1)
 
-            if ENABLE_TERRAIN:
-                # Update terrain history and current terrain map
-                local_terrain = self._get_local_terrain_matrix(
-                    int(self.cca_positions[i][0]), int(self.cca_positions[i][1])
-                )
-                self.terrain_history[i] = np.roll(self.terrain_history[i], shift=-1, axis=0)
-                self.terrain_history[i][-1] = local_terrain
+                if globals.RECTANGULAR_FOXTROT:
+                    self.foxtrot_position = foxtrot_movement_fn_cube(self.foxtrot_position, self.cube_state, self._terrain_z_at)
+                    self.foxtrot_position = np.clip(self.foxtrot_position, 0, self.grid_size - 1)
 
-        # Calculate reward
-        reward = self._calculate_reward()
+                self.foxtrot_history = np.roll(self.foxtrot_history, shift=-1, axis=0)
+                self.foxtrot_history[-1] = self.foxtrot_position
 
-        # Update Foxtrot position and history  
-        if globals.RECTANGULAR_FOXTROT:
-            self.foxtrot_position = foxtrot_movement_fn_cube(self.foxtrot_position, self.cube_state, self._terrain_z_at)
-            self.foxtrot_position = np.clip(self.foxtrot_position, 0, self.grid_size - 1)
+                self.cca_history[i] = np.roll(self.cca_history[i], shift=-1, axis=0)
+                self.cca_history[i][-1] = self.cca_positions[i]
 
-        
-        # Update Foxtrot history
-        self.foxtrot_history = np.roll(self.foxtrot_history, shift=-1, axis=0)
-        self.foxtrot_history[-1] = self.foxtrot_position
+            # Calculate reward for this sub-step
+            reward = self._calculate_reward()
+            sub_rewards.append(reward)
 
+            # Reset the environment to the initial state for the next sub-step
+            self.cca_positions = np.copy(initial_cca_positions)
+            self.foxtrot_position = np.copy(initial_foxtrot_position)
+            self.action_history = [np.copy(hist) for hist in initial_action_history]
+            self.cca_history = [np.copy(hist) for hist in initial_cca_history]
+            self.foxtrot_history = np.copy(initial_foxtrot_history)
 
-        # Check success condition for ANY of the CCAs:
-        done_success = False 
+        # Aggregate rewards across sub-steps (e.g., mean, sum, or scaled rewards)
+        scaled_rewards = self._gpro_scale_rewards(np.array(sub_rewards))
 
-        # Testing with no DONE SUCCESS PARAMTER
-
-        #for i, pos in enumerate(self.cca_positions):
-        #    distance = np.linalg.norm(pos - self.foxtrot_position)
-        #    if distance < 2.0:  # same capture_radius
-        #        done_success = True
-        #        break
-
-        # Time-limit done
+        # Increment macro-step and update state permanently
         self.current_step += 1
-        truncated = (self.current_step >= self.max_steps)
+        truncated = self.current_step >= self.max_steps
 
-        # If agent succeeded, terminate the episode
-        terminated = done_success  # or keep it False if you want continuing episodes
-        
-        # Return standard Gymnasium step
-        return self._get_observation(), reward, terminated, truncated, {}
-
+        # Return the aggregated observation, scaled rewards, and macro-step status
+        obs = self._get_observation()
+        return obs, scaled_rewards, False, truncated, {}
 
     # ---------------------------
     # TERRAIN GENERATION
@@ -352,7 +348,7 @@ class PPOEnv(gym.Env):
                 # Map to 5×5 grid indices
                 grid[i + half_range, j + half_range] = [x_val, y_val, z_val]
 
-        return grid.flatten()
+        return grid  # No flattening
 
     def _get_observation(self):
         state = []
@@ -534,8 +530,8 @@ if __name__ == "__main__":
         use_sde = False, # Essentially reducing delta of actions when rewards are very positive (breaks it while initially learning)
         #sde_sample_freq = 3,
         learning_rate=linear_schedule(initial_value= 0.00035),
-        n_steps=300, # Steps per learning update
-        batch_size=100,
+        n_steps=1000, # Steps per learning update
+        batch_size=500,
         gamma=0.9,
         gae_lambda= 0.85,
         vf_coef = 0.5,
