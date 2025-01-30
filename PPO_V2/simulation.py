@@ -214,7 +214,7 @@ class PPOEnv(gym.Env):
         """Clamp action values to ensure they stay within bounds."""
         return np.clip(action, -step_size, step_size)
 
-    def _calculate_reward(self):
+    def _calculate_reward(self, obs = None, action = None):
         """
         Refactored reward function using potential-based reward shaping and multi-objective optimization.
         """
@@ -339,6 +339,7 @@ if __name__ == "__main__":
         policy="MlpPolicy",
         policy_kwargs=policy_kwargs,
         env=vec_env,
+        reward_function=env._calculate_reward, 
         verbose=1,
         normalize_advantage = True,
         use_sde = False, # Essentially reducing delta of actions when rewards are very positive (breaks it while initially learning)
