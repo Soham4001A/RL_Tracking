@@ -1,5 +1,5 @@
 # Global Params
-grid_size = 500
+grid_size = 100
 num_cca = 1
 step_size = 10 # Speed in grid space
 spawn_range = 20  # Adjust this range for initial curriculum

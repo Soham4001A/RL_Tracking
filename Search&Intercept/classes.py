@@ -38,7 +38,7 @@ class Foxtrot(BaseObject):
 
 
 class SimulationEngine:
-    def __init__(self, grid_size=1000):
+    def __init__(self, grid_size=500):
         self.grid_size = grid_size
         self.objects = []
         self.fig = None

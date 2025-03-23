@@ -18,7 +18,7 @@ POSITIONAL_DEBUG = True
 class PPOEnv(gym.Env):
     """Custom Env that supports sub-step logic for GRPO."""
 
-    def __init__(self, grid_size=500, num_cca=1):
+    def __init__(self, grid_size=500, num_cca=3):
         super(PPOEnv, self).__init__()
         self.grid_size = grid_size
         self.num_cca = num_cca
