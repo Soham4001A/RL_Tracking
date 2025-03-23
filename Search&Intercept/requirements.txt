@@ -1,0 +1,16 @@
+# Requirements for ObjectTrackingRL
+
+# Gymnasium for the environment interface
+gymnasium
+
+# NumPy for numerical operations
+numpy
+
+# PyTorch for deep learning (adjust version as needed)
+torch
+
+# Matplotlib for plotting and animations
+matplotlib
+
+# Stable-Baselines3 for reinforcement learning algorithms (including GRPO support)
+stable-baselines3
