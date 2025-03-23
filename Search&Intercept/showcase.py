@@ -5,7 +5,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 from matplotlib.animation import FuncAnimation
-from stable_baselines3 import PPO
+from stable_baselines3.grpo import GRPO
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
 # Visualization parameters
@@ -14,7 +14,7 @@ STEPS = 10000
 
 class ShowcaseSimulation:
     def __init__(self, model_path, vec_env, steps):
-        self.model = PPO.load(model_path, env = vec_env)
+        self.model = GRPO.load(model_path, env=vec_env)
         self.env = vec_env
         self.steps = steps
         self.cca_positions = []
@@ -22,14 +22,14 @@ class ShowcaseSimulation:
 
     def run_simulation(self):
         """Run the simulation and collect positions for visualization."""
-        obs = self.env.reset()
+        obs, info = self.env.reset()
 
         for _ in range(self.steps):
             # Get the action from the trained model
             action, _ = self.model.predict(obs)
 
             # Step the environment
-            obs, reward, terminated, truncated = self.env.step(action)
+            obs, reward, terminated, truncated, info = self.env.step(action)
 
             # Store positions for visualization
             self.cca_positions.append(
@@ -40,6 +40,9 @@ class ShowcaseSimulation:
             )
 
             terminated = truncated = False #This is wrong. It's happening because terminated is being set to done success at end of each training episode
+            
+            if terminated or truncated:
+                break
 
             if truncated:
                 print("Episode Truncated (Non-natural endpoint (hard-stopped))")

@@ -221,6 +221,44 @@ def foxtrot_movement_fn_cube(position, cube_state):
     position = np.round(position).astype(int)
     return position
 
+class GridSpace:
+    def __init__(self, grid_size):
+        self.grid_size = grid_size
+        # Create a 3D grid where each cell is initially 0
+        self.grid = np.full((grid_size, grid_size, grid_size), 0, dtype=object)
+
+    def update_robot_area(self, prev_center, new_center, robot_name, observable_radius):
+        half = observable_radius // 2
+        # Clear previous area: remove robot string and increment the cell's integer
+        for x in range(max(0, prev_center[0] - half), min(self.grid_size, prev_center[0] + half + 1)):
+            for y in range(max(0, prev_center[1] - half), min(self.grid_size, prev_center[1] + half + 1)):
+                for z in range(max(0, prev_center[2] - half), min(self.grid_size, prev_center[2] + half + 1)):
+                    cell = self.grid[x, y, z]
+                    if isinstance(cell, tuple) and cell[1] == robot_name:
+                        # Remove the string by setting the cell back to an integer (incremented by 1)
+                        self.grid[x, y, z] = cell[0] + 1
+        
+        # Set new area: mark cells within the observable cube with a tuple (current integer, robot_name)
+        for x in range(max(0, new_center[0] - half), min(self.grid_size, new_center[0] + half + 1)):
+            for y in range(max(0, new_center[1] - half), min(self.grid_size, new_center[1] + half + 1)):
+                for z in range(max(0, new_center[2] - half), min(self.grid_size, new_center[2] + half + 1)):
+                    cell = self.grid[x, y, z]
+                    if isinstance(cell, int):
+                        self.grid[x, y, z] = (cell, robot_name)
+
+    def update_target_area(self, prev_pos, new_pos):
+        x, y, z = prev_pos
+        cell = self.grid[x, y, z]
+        if isinstance(cell, tuple) and cell[1] == "target":
+            # Remove the target string and increment the cell's integer
+            self.grid[x, y, z] = cell[0] + 1
+        
+        x, y, z = new_pos
+        cell = self.grid[x, y, z]
+        if isinstance(cell, int):
+            self.grid[x, y, z] = (cell, "target")
+
+
 class Transformer(BaseFeaturesExtractor):
     def __init__(
         self,
@@ -310,3 +348,4 @@ class Transformer(BaseFeaturesExtractor):
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
         return pe
+    

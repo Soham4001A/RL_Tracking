@@ -22,6 +22,10 @@ class PPOEnv(gym.Env):
         super(PPOEnv, self).__init__()
         self.grid_size = grid_size
         self.num_cca = num_cca
+        # Initialize grid using the GridSpace class
+        self.grid = GridSpace(self.grid_size)
+        # Define the observable radius for a robot (adjustable as needed)
+        self.robot_observable_radius = 100
 
         # ------------------------------
         # GRPO-related parameters
@@ -30,7 +34,7 @@ class PPOEnv(gym.Env):
         # ------------------------------
 
         self.current_step = 0
-        self.max_steps = 400  # The "macro-step" horizon
+        self.max_steps = 600  # Episode Length
         self.cube_state = {}
 
         # Reward Function Utils
@@ -41,16 +45,13 @@ class PPOEnv(gym.Env):
         self.charlie_capture_radius = 75
 
         # Action space: Continuous movement in 3D space
-        #  shape=(self.num_cca, 3), each dimension in [-step_size, step_size]
-        self.action_space = spaces.Box(
-            low=-step_size, high=step_size, shape=(self.num_cca, 3), dtype=np.float32
-        )
+        self.action_space = spaces.MultiDiscrete([2 * step_size + 1] * (self.num_cca * 3))
 
-        # Observations: 6 time steps worth of (CCA pos, Foxtrot pos, CCA action)
+        obs_dim = 6 * self.num_cca * (self.robot_observable_radius ** 3)
         self.observation_space = spaces.Box(
             low=0,
-            high=self.grid_size,
-            shape=(6 * (3 * self.num_cca + 3 + 3 * self.num_cca),),
+            high=np.inf,
+            shape=(obs_dim,),
             dtype=np.float32,
         )
 
@@ -90,6 +91,8 @@ class PPOEnv(gym.Env):
         self.action_history = [np.zeros((6, 3), dtype=np.float32) for _ in range(self.num_cca)]
         self.cca_history = [np.tile(pos, (6, 1)) for pos in self.cca_positions]
         self.foxtrot_history = np.tile(self.foxtrot_position, (6, 1))
+        # After initializing self.cca_positions and self.foxtrot_history
+        self.robot_obs_history = [ [self._extract_subgrid(pos) for _ in range(6)] for pos in self.cca_positions ]
 
         # Randomize Foxtrot position on the cube path
         side_length = 200  # Length of each cube edge
@@ -158,6 +161,9 @@ class PPOEnv(gym.Env):
         """Perform one sub-step, accumulate reward, but only increment the major step after enough sub-steps."""
 
         self.current_step += 1
+        # Store previous positions for grid update
+        prev_cca_positions = [pos.copy() for pos in self.cca_positions]
+        prev_foxtrot_position = self.foxtrot_position.copy()
 
         # Convert actions to (num_cca, 3) if needed
         actions = np.array(actions, dtype=np.float32)
@@ -190,6 +196,15 @@ class PPOEnv(gym.Env):
         self.foxtrot_history = np.roll(self.foxtrot_history, shift=-1, axis=0)
         self.foxtrot_history[-1] = self.foxtrot_position
 
+        # Update the grid for each robot's movement using the GridSpace class
+        for i, new_pos in enumerate(self.cca_positions):
+            self.grid.update_robot_area(prev_cca_positions[i], new_pos, f"CCA_{i}", self.robot_observable_radius)
+            self.robot_obs_history[i].pop(0)
+            self.robot_obs_history[i].append(self._extract_subgrid(new_pos))
+
+        # Update the grid for the target's movement
+        self.grid.update_target_area(prev_foxtrot_position, self.foxtrot_position)
+
         done = False
         truncated = False
 
@@ -202,110 +217,256 @@ class PPOEnv(gym.Env):
         return obs, reward, done, truncated, info
 
     def _get_observation(self):
-        state = []
-        for t in range(6):  # For each time step
-            for i in range(self.num_cca):  # For each CCA
-                state.extend(self.cca_history[i][t])  # CCA position
-                state.extend(self.action_history[i][t])  # CCA action
-            state.extend(self.foxtrot_history[t])  # Foxtrot position
-        return np.array(state, dtype=np.float32)
+        obs_list = []
+        for t in range(6):  # for each time step in history
+            for i in range(self.num_cca):  # for each robot
+                obs_list.append(self.robot_obs_history[i][t].flatten())
+        return np.concatenate(obs_list).astype(np.float32)
 
     def _decode_action(self, action):
-        """Clamp action values to ensure they stay within bounds."""
-        return np.clip(action, -step_size, step_size)
-
-    def _calculate_reward(self, obs = None, action = None):
-        """
-        Refactored reward function using potential-based reward shaping and multi-objective optimization.
-        """
-        if globals.COMPLEX_REWARD:
-            # Initialize reward
-            reward = 0.0
-
-            # Hyperparameters
-            alpha = 300.0              # Weight for progress
-            beta = 0.05                # Weight for energy efficiency
-            gamma_collision = -2000.0  # Penalty for collisions
-            gamma = 0.1                # Potential shaping weight
-            max_action_norm = 10.0     # Maximum expected action magnitude
-            capture_radius = 15
-
-            # Define the potential function
-            def potential():
-                return -np.mean([np.linalg.norm(pos - self.foxtrot_position) for pos in self.cca_positions])
-
-            # Current and previous potential
-            current_potential = potential()
-            previous_potential = getattr(self, 'previous_potential', current_potential)
-
-            # Potential-based shaping
-            shaped_reward = gamma * (current_potential - previous_potential)
-            reward += shaped_reward
-
-            # Update previous potential for next step
-            self.previous_potential = current_potential
-
-            # Progress-Based Reward
-            # Calculate average progress across all CCAs
-            progress = 0.0
-            for i, pos in enumerate(self.cca_positions):
-                if len(self.cca_history[i]) >= 2:
-                    prev_distance = np.linalg.norm(self.cca_history[i][-2] - self.foxtrot_position)
-                    current_distance = np.linalg.norm(pos - self.foxtrot_position)
-                    progress += (prev_distance - current_distance)
-
-                    if current_distance < capture_radius: #capture radius bonus
-                        reward += 1000
-
-            progress /= self.num_cca
-            reward += alpha * progress
-
-            # Energy Efficiency Penalty
-            energy_penalty = beta * np.sum([np.linalg.norm(action) for action in self.action_history[i][-1] for i in range(self.num_cca)])
-            reward -= energy_penalty
-
-            # Collision Penalty
-            collision_penalty = 0.0
-            for i, pos in enumerate(self.cca_positions):
-                distance = np.linalg.norm(pos - self.foxtrot_position)
-                if distance < self.collision_radius:
-                    collision_penalty += gamma_collision
-            reward += collision_penalty
-
-            # Optional: Exploration Bonus
-            # Encourage movement by rewarding the agent for covering more distance over time
-            movement_bonus = 0.0
-            for i, pos in enumerate(self.cca_positions):
-                total_movement = np.linalg.norm(pos - self.cca_history[i][0])
-                movement_bonus += 0.1 * total_movement  # Tunable parameter
-            reward += movement_bonus
-
-            # Clip reward to prevent extreme values
-            reward = np.clip(reward, gamma_collision, 2000)
-
-            if REWARD_DEBUG:
-                #print(f"Refactored Complex Reward: {reward}")
-                for i in range(self.num_cca):
-                    recent_distance = np.linalg.norm(self.cca_positions[i] - self.foxtrot_position)
-                    print(f"Raw Complex Reward: {reward}, CCA {i} Distance: {recent_distance}")
-
-            return reward
-
-        elif globals.BASIC_REWARD:
-            # Basic reward logic remains unchanged or can be similarly refactored
-            reward = 0
-            for i, pos in enumerate(self.cca_positions):
-                distance = np.linalg.norm(pos - self.foxtrot_position)
-                reward -= distance / 100
-
-            if REWARD_DEBUG:
-                print(f"Basic Reward is {reward}")
-
-            return reward
-
+        """Decode a discrete action for a single robot into a movement vector in [-step_size, step_size]."""
+        action = np.array(action, dtype=np.float32)
+        # If the action is a single robot's action (shape (3,)), use it directly
+        if action.ndim == 1 and action.size == 3:
+            return action - globals.step_size
+        # If the action is for multiple robots (shape (num_cca, 3)), decode each accordingly
+        elif action.ndim == 2 and action.shape[1] == 3:
+            return action - globals.step_size
         else:
-            raise ValueError("No reward flag set! Set COMPLEX_REWARD or BASIC_REWARD to True.")
+            raise ValueError(f"Unexpected action shape in _decode_action: {action.shape}")
 
+    def _calculate_reward(self, obs=None, action=None):
+        """
+        Advanced reward function optimized for exploration when target is not visible
+        and focused pursuit when target is detected.
+        
+        Key components:
+        1. Target Pursuit: Strong scaling rewards when target is visible
+        2. Exploration: Incentivizes visiting low-count cells and penalizes revisiting
+        3. Coordination: Rewards distribution of robots across unexplored space
+        4. Memory: Maintains and rewards progress toward last known target location
+        5. Movement efficiency: Penalizes excessive or redundant movement
+        
+        Returns combined, normalized reward across all robots.
+        """
+        # Hyperparameters - tuned for optimal exploration vs exploitation balance
+        capture_reward = 5000.0       # High reward for reaching target
+        target_visible_weight = 1000.0 # Substantial bonus just for having target visible
+        distance_weight = 800.0       # Reward component based on proximity when visible
+        exploration_weight = 400.0    # Base reward for exploring low-count cells
+        novelty_bonus = 300.0         # Additional reward for finding new/low-count areas
+        last_seen_weight = 200.0      # Weight for moving toward last known position
+        coordination_weight = 150.0   # Reward for robots exploring different areas
+        alignment_weight = 100.0      # Reward for moving toward target when visible
+        entropy_bonus = 50.0          # Reward for diverse movement patterns
+        energy_penalty = 0.1          # Small penalty for large movements
+        revisit_penalty = 2.0         # Penalty for revisiting high-count cells
+        time_penalty = 1.0            # Small constant penalty to encourage efficiency
+        
+        total_reward = 0.0
+        
+        # Track if any robot can see the target
+        target_visible_to_any = False
+        last_known_positions = []
+        visitation_stats = []
+        
+        # First pass to gather information
+        for i, robot_pos in enumerate(self.cca_positions):
+            # Get current robot's subgrid and its statistics
+            current_subgrid = self._extract_subgrid(robot_pos)
+            current_avg = np.mean(current_subgrid)
+            current_min = np.min(current_subgrid)
+            current_max = np.max(current_subgrid)
+            
+            # Previous subgrid for comparison
+            previous_subgrid = self.robot_obs_history[i][-2] if len(self.robot_obs_history[i]) >= 2 else current_subgrid
+            previous_avg = np.mean(previous_subgrid)
+            
+            # Store stats for later coordination calculations
+            visitation_stats.append((current_avg, current_min, current_max))
+            
+            # Check if target is visible to this robot
+            half = self.robot_observable_radius // 2
+            is_target_visible = np.all(self.foxtrot_position >= (robot_pos - half)) and np.all(self.foxtrot_position <= (robot_pos + half))
+            
+            if is_target_visible:
+                target_visible_to_any = True
+                last_known_positions.append((self.foxtrot_position.copy(), self.current_step))
+        
+        # If we have no last known positions but have class storage, initialize it
+        if not hasattr(self, 'last_known_target_pos'):
+            self.last_known_target_pos = None
+            self.last_seen_step = -1000  # Start with a high negative value
+        
+        # Update last known position if target is visible
+        if target_visible_to_any and last_known_positions:
+            # Take the most recent sighting
+            self.last_known_target_pos, self.last_seen_step = max(last_known_positions, key=lambda x: x[1])
+        
+        # Second pass to calculate rewards for each robot
+        for i, robot_pos in enumerate(self.cca_positions):
+            robot_reward = 0.0
+            
+            # Extract data about current and previous positions/observations
+            current_subgrid = self._extract_subgrid(robot_pos)
+            current_avg = visitation_stats[i][0]
+            previous_subgrid = self.robot_obs_history[i][-2] if len(self.robot_obs_history[i]) >= 2 else current_subgrid
+            previous_avg = np.mean(previous_subgrid)
+            
+            # Get robot movement
+            movement = self.cca_history[i][-1] - self.cca_history[i][-2]
+            movement_magnitude = np.linalg.norm(movement)
+            
+            # Check if target is visible to this specific robot
+            half = self.robot_observable_radius // 2
+            is_target_visible = np.all(self.foxtrot_position >= (robot_pos - half)) and np.all(self.foxtrot_position <= (robot_pos + half))
+            
+            if is_target_visible:
+                # Calculate distance to target and normalized distance (0 = at target, 1 = at observation boundary)
+                dist_to_target = np.linalg.norm(robot_pos - self.foxtrot_position)
+                normalized_dist = np.clip(dist_to_target / self.robot_observable_radius, 0, 1)
+                
+                # Big reward just for having target in view
+                robot_reward += target_visible_weight
+                
+                # Add capture reward if very close
+                if dist_to_target <= self.capture_radius:
+                    robot_reward += capture_reward
+                
+                # Add distance-based component (higher as robot gets closer)
+                robot_reward += distance_weight * (1 - normalized_dist)
+                
+                # Add alignment reward if moving toward target
+                if movement_magnitude > 0:
+                    movement_unit = movement / movement_magnitude
+                    target_dir = self.foxtrot_position - robot_pos
+                    if np.linalg.norm(target_dir) > 0:
+                        target_unit = target_dir / np.linalg.norm(target_dir)
+                        alignment = np.dot(movement_unit, target_unit)
+                        robot_reward += alignment_weight * np.clip(alignment, 0, 1)
+            
+            else:  # Target not visible - focus on exploration
+                # Base exploration reward - inversely proportional to cell visit count
+                # Higher reward for cells with lower visitation
+                novelty_factor = np.exp(-current_avg / 2)  # Exponential decay function for novelty
+                robot_reward += exploration_weight * novelty_factor
+                
+                # Bonus for finding area with even lower counts than before
+                if current_avg < previous_avg:
+                    improvement = previous_avg - current_avg
+                    robot_reward += novelty_bonus * improvement
+                
+                # Penalty for revisiting already heavily visited cells
+                if current_avg > 3:  # Only penalize if average count is significant
+                    robot_reward -= revisit_penalty * current_avg
+                
+                # If we have a last known position and it's relatively recent, provide guidance
+                if self.last_known_target_pos is not None:
+                    steps_since_last_seen = self.current_step - self.last_seen_step
+                    
+                    # Only use last known position if it's not too old (within 100 steps)
+                    if steps_since_last_seen < 100:
+                        # Calculate direction to last known position
+                        last_known_dir = self.last_known_target_pos - robot_pos
+                        last_known_dist = np.linalg.norm(last_known_dir)
+                        
+                        # If robot is moving and not too close to last known pos
+                        if movement_magnitude > 0 and last_known_dist > 5:
+                            # Normalize directions
+                            movement_unit = movement / movement_magnitude
+                            last_known_unit = last_known_dir / last_known_dist
+                            
+                            # Calculate alignment with last known position
+                            memory_alignment = np.dot(movement_unit, last_known_unit)
+                            
+                            # Weight decreases as time passes since last sighting
+                            time_decay = max(0, 1 - steps_since_last_seen / 100)
+                            robot_reward += last_seen_weight * np.clip(memory_alignment, 0, 1) * time_decay
+                
+                # Entropy bonus: reward for diverse movement patterns
+                if len(self.action_history[i]) >= 3:
+                    recent_actions = self.action_history[i][-3:]
+                    # Calculate variance of recent actions as a measure of exploration diversity
+                    action_variance = np.mean(np.var(recent_actions, axis=0))
+                    robot_reward += entropy_bonus * min(1.0, action_variance)
+            
+            # Add movement efficiency penalty
+            energy_cost = energy_penalty * movement_magnitude
+            robot_reward -= energy_cost
+            
+            # Add coordination bonus if robots are exploring different areas
+            # This incentivizes robots to spread out when exploring
+            if len(self.cca_positions) > 1 and not is_target_visible:
+                # Calculate average distance to other robots
+                distances_to_others = []
+                for j, other_pos in enumerate(self.cca_positions):
+                    if i != j:
+                        dist = np.linalg.norm(robot_pos - other_pos)
+                        distances_to_others.append(dist)
+                
+                if distances_to_others:
+                    # Higher reward for being farther from other robots (encouraging spread)
+                    avg_distance = np.mean(distances_to_others)
+                    normalized_distance = min(1.0, avg_distance / (self.grid_size / 4))  # Normalize by 1/4 of grid size
+                    robot_reward += coordination_weight * normalized_distance
+            
+            # Add this robot's reward to total
+            total_reward += robot_reward
+        
+        # Average rewards across all robots
+        total_reward /= max(1, self.num_cca)
+        
+        # Global time penalty
+        total_reward -= time_penalty
+        
+        if REWARD_DEBUG:
+            distances_str = ", ".join([f"CCA_{i}: {np.linalg.norm(self.cca_positions[i]-self.foxtrot_position):.2f}"
+                                    for i in range(self.num_cca)])
+            visibility_str = ", ".join([f"CCA_{i}: {'✓' if np.all(self.foxtrot_position >= (self.cca_positions[i] - self.robot_observable_radius//2)) and np.all(self.foxtrot_position <= (self.cca_positions[i] + self.robot_observable_radius//2)) else '✗'}"
+                                    for i in range(self.num_cca)])
+            print(f"Step: {self.current_step} | Visibility: [{visibility_str}] | Distances: [{distances_str}] | Reward: {total_reward:.2f}")
+        
+        return total_reward
+        
+    def _extract_subgrid(self, position):
+        half = self.robot_observable_radius // 2
+        # Create a subgrid filled with zeros of the desired shape.
+        subgrid = np.zeros((self.robot_observable_radius,
+                            self.robot_observable_radius,
+                            self.robot_observable_radius), dtype=np.float32)
+        # Define the bounds for the subgrid in the global grid
+        x_min = position[0] - half
+        y_min = position[1] - half
+        z_min = position[2] - half
+        x_max = x_min + self.robot_observable_radius
+        y_max = y_min + self.robot_observable_radius
+        z_max = z_min + self.robot_observable_radius
+
+        grid = self.grid.grid
+        # Calculate the overlapping region with the global grid
+        grid_x_min = max(x_min, 0)
+        grid_y_min = max(y_min, 0)
+        grid_z_min = max(z_min, 0)
+        grid_x_max = min(x_max, self.grid_size)
+        grid_y_max = min(y_max, self.grid_size)
+        grid_z_max = min(z_max, self.grid_size)
+        
+        # Determine where to place the overlapping values in the subgrid
+        sub_x_min = grid_x_min - x_min
+        sub_y_min = grid_y_min - y_min
+        sub_z_min = grid_z_min - z_min
+        
+        for xi, i in zip(range(grid_x_min, grid_x_max), range(sub_x_min, sub_x_min + (grid_x_max - grid_x_min))):
+            for yj, j in zip(range(grid_y_min, grid_y_max), range(sub_y_min, sub_y_min + (grid_y_max - grid_y_min))):
+                for zk, k in zip(range(grid_z_min, grid_z_max), range(sub_z_min, sub_z_min + (grid_z_max - grid_z_min))):
+                    cell = grid[xi, yj, zk]
+                    # If cell is a tuple, use its integer count; otherwise, use the cell value directly.
+                    if isinstance(cell, tuple):
+                        subgrid[i, j, k] = cell[0]
+                    else:
+                        subgrid[i, j, k] = cell
+        return subgrid
+    
 if __name__ == "__main__":
 
     def linear_schedule(initial_value: float):
@@ -326,7 +487,7 @@ if __name__ == "__main__":
     globals.RAND_FIXED_CCA = False
     globals.PROXIMITY_CCA = True
 
-    env = PPOEnv(grid_size=500, num_cca=1) 
+    env = PPOEnv(grid_size=500, num_cca=3) 
     vec_env = DummyVecEnv([lambda: env])
     vec_env = VecNormalize(vec_env, norm_obs=True, norm_reward=True)
     policy_kwargs = dict(
@@ -344,21 +505,17 @@ if __name__ == "__main__":
         normalize_advantage = True,
         use_sde = False, # Essentially reducing delta of actions when rewards are very positive (breaks it while initially learning)
         #sde_sample_freq = 3,
-        learning_rate=linear_schedule(initial_value= 0.0002),
+        learning_rate=linear_schedule(initial_value= 0.0003),
         samples_per_time_step= 5,
         n_steps=600, # Steps per learning update
         batch_size=100,
         gamma=0.85,
         gae_lambda= 0.8,
-        vf_coef = 0.85, # Lower reliance on v(s) to compute advantage which is then used to compute Loss -> Gradient
+        vf_coef = 0.65, # Lower reliance on v(s) to compute advantage which is then used to compute Loss -> Gradient
         clip_range=0.4, # Clips larger updates to remain within +- 60%
         #ent_coef=0.05,
         #tensorboard_log="./Patrol&Proetect_PPO/ppo_patrol_tensorboard/"
     )
-
-    # Cirriculum Learning
-    globals.COMPLEX_REWARD = True 
-
 
     """
     # Train the model with stationary foxtrot and small random CCA
@@ -387,13 +544,13 @@ if __name__ == "__main__":
     
     """
     # Finally, train it to follow a movement function - spawn CCA's at same location as foxtrot initially
-    globals.STATIONARY_FOXTROT = False
-    globals.RECTANGULAR_FOXTROT = True
-    globals.RAND_FIXED_CCA = False
-    globals.PROXIMITY_CCA = True
-    model.learn(total_timesteps=90_000)
-
+    globals.STATIONARY_FOXTROT = True
+    globals.RECTANGULAR_FOXTROT = False
+    globals.RAND_FIXED_CCA = True
     globals.PROXIMITY_CCA = False
+    model.learn(total_timesteps=30_000)
+
+    globals.RAND_FIXED_CCA = False
     model.learn(total_timesteps=90_000)
 
     # Save the model
