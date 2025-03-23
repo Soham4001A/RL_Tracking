@@ -1,0 +1,19 @@
+" HERE WE GOOOOO "
+
+PATH FIXING -->
+1. Fix Path for Foxtrot -> Done {1/21/2025}
+2. Add random location spawing for CCA's to train -> Done {1/19/2025}
+3. Add random location spawing for Foxtrot to train -> Done {1/19/2025}
+4. Add cirriculum based learning for model with various basic scenarios -> Done {1/21/2025}
+
+PATROL & PROTECT OBJECTIVE -->
+1. Start with basic third object tracking & interception
+
+TERRAIN ON Z AXIS + OBJECT TRACKING -->
+1. Start with basic terrain with random spawn (CCA + stationary Foxtrot) & interception
+
+" One Day "
+
+EXPANSION TO MULTIDISCRETE -->
+1. Ensure that when expanding CCA's - we have correct input shaping -> see o1 suggestion
+2. Ensure that when expanding CCA's - Move to MultiDiscrete
