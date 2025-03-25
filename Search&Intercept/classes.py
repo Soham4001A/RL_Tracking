@@ -229,30 +229,49 @@ class GridSpace:
 
     def update_robot_area(self, prev_center, new_center, robot_name, observable_radius):
         half = observable_radius // 2
-        # Clear previous area: remove robot string and increment the cell's integer
-        for x in range(max(0, prev_center[0] - half), min(self.grid_size, prev_center[0] + half + 1)):
-            for y in range(max(0, prev_center[1] - half), min(self.grid_size, prev_center[1] + half + 1)):
-                for z in range(max(0, prev_center[2] - half), min(self.grid_size, prev_center[2] + half + 1)):
-                    cell = self.grid[x, y, z]
-                    if isinstance(cell, tuple) and cell[1] == robot_name:
-                        # Remove the string by setting the cell back to an integer (incremented by 1)
-                        self.grid[x, y, z] = cell[0] + 1
-        
-        # Set new area: mark cells within the observable cube with a tuple (current integer, robot_name)
-        for x in range(max(0, new_center[0] - half), min(self.grid_size, new_center[0] + half + 1)):
-            for y in range(max(0, new_center[1] - half), min(self.grid_size, new_center[1] + half + 1)):
-                for z in range(max(0, new_center[2] - half), min(self.grid_size, new_center[2] + half + 1)):
-                    cell = self.grid[x, y, z]
-                    if isinstance(cell, int):
-                        self.grid[x, y, z] = (cell, robot_name)
+
+        # --- Clear previous area ---
+        x_prev_start = max(0, prev_center[0] - half)
+        x_prev_end = min(self.grid_size, prev_center[0] + half + 1)
+        y_prev_start = max(0, prev_center[1] - half)
+        y_prev_end = min(self.grid_size, prev_center[1] + half + 1)
+        z_prev_start = max(0, prev_center[2] - half)
+        z_prev_end = min(self.grid_size, prev_center[2] + half + 1)
+
+        shape_prev = (x_prev_end - x_prev_start, y_prev_end - y_prev_start, z_prev_end - z_prev_start)
+        for idx in np.ndindex(shape_prev):
+            x = x_prev_start + idx[0]
+            y = y_prev_start + idx[1]
+            z = z_prev_start + idx[2]
+            cell = self.grid[x, y, z]
+            if isinstance(cell, tuple) and cell[1] == robot_name:
+                self.grid[x, y, z] = cell[0] + 1
+
+        # --- Set new area ---
+        x_new_start = max(0, new_center[0] - half)
+        x_new_end = min(self.grid_size, new_center[0] + half + 1)
+        y_new_start = max(0, new_center[1] - half)
+        y_new_end = min(self.grid_size, new_center[1] + half + 1)
+        z_new_start = max(0, new_center[2] - half)
+        z_new_end = min(self.grid_size, new_center[2] + half + 1)
+
+        shape_new = (x_new_end - x_new_start, y_new_end - y_new_start, z_new_end - z_new_start)
+        for idx in np.ndindex(shape_new):
+            x = x_new_start + idx[0]
+            y = y_new_start + idx[1]
+            z = z_new_start + idx[2]
+            cell = self.grid[x, y, z]
+            if isinstance(cell, int):
+                self.grid[x, y, z] = (cell, robot_name)
 
     def update_target_area(self, prev_pos, new_pos):
+        # Update previous target area
         x, y, z = prev_pos
         cell = self.grid[x, y, z]
         if isinstance(cell, tuple) and cell[1] == "target":
-            # Remove the target string and increment the cell's integer
             self.grid[x, y, z] = cell[0] + 1
-        
+
+        # Mark new target area
         x, y, z = new_pos
         cell = self.grid[x, y, z]
         if isinstance(cell, int):

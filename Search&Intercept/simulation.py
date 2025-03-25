@@ -25,19 +25,17 @@ class PPOEnv(gym.Env):
         # Initialize grid using the GridSpace class 
         self.grid = GridSpace(self.grid_size)
         # Define the observable radius for a robot (adjustable as needed)
-        self.robot_observable_radius = 60
+        self.robot_observable_radius = 100
 
         self.current_step = 0
         self.max_steps = 600  # Episode Length
         self.cube_state = {}
 
-        # Reward Function Utils
-        self.capture_radius = globals.step_size
-
         # Action space: Continuous movement in 3D space
         self.action_space = spaces.MultiDiscrete([2 * step_size + 1] * (self.num_cca * 3))
 
-        obs_dim = 6 * self.num_cca * ((self.robot_observable_radius ** 3) * 2) + (self.num_cca * 3)     
+        # In the __init__ method of PPOEnv, update the observation space dimension:
+        obs_dim = 6 * self.num_cca * 5 + (self.num_cca * 3)
         self.observation_space = spaces.Box(
             low=0,
             high=np.inf,
@@ -228,237 +226,168 @@ class PPOEnv(gym.Env):
 
     def _calculate_reward(self, obs=None, action=None):
         """
-        Advanced reward function optimized for exploration when target is not visible
-        and focused pursuit when target is detected.
+        Updated reward function using switch-case logic:
+        - Case 1: No target in sight and no last known location: Encourage robots to spread out and search.
+        - Case 2: Target is in sight: Heavily reward reducing distance and aligning movement toward the target.
+        - Case 3: No target in sight but a last known location exists: Encourage movement toward the last known target, with incentive decaying over time.
         
-        Key components:
-        1. Target Pursuit: Strong scaling rewards when target is visible
-        2. Exploration: Incentivizes visiting low-count cells and penalizes revisiting
-        3. Coordination: Rewards distribution of robots across unexplored space
-        4. Memory: Maintains and rewards progress toward last known target location
-        5. Movement efficiency: Penalizes excessive or redundant movement
-        
-        Returns combined, normalized reward across all robots.
+        Additional penalties for energy expenditure and a constant time penalty are applied.
         """
-        # Hyperparameters - tuned for optimal exploration vs exploitation balance
-        capture_reward = 5000.0       # High reward for reaching target
-        target_visible_weight = 1000.0 # Substantial bonus just for having target visible
-        distance_weight = 800.0       # Reward component based on proximity when visible
-        exploration_weight = 300.0    # Base reward for exploring low-count cells
-        novelty_bonus = 100.0         # Additional reward for finding new/low-count areas
-        last_seen_weight = 100.0      # Weight for moving toward last known position
-        coordination_weight = 150.0   # Reward for robots exploring different areas
-        alignment_weight = 400.0      # Reward for moving toward target when visible
-        entropy_bonus = 25.0          # Reward for diverse movement patterns
-        energy_penalty = 0.1          # Small penalty for large movements
-        revisit_penalty = 100.0         # Penalty for revisiting high-count cells
-        time_penalty = 1.0            # Small constant penalty to encourage efficiency
-        
+        # Hyperparameters (tweak as necessary)
+        spread_reward_weight = 200.0       # Reward for spreading out when target is unknown.
+        intercept_reward_weight = 1000.0   # Reward for reducing distance to target when target is visible.
+        alignment_reward_weight = 500.0    # Bonus for aligning movement toward the target.
+        last_known_reward_weight = 500.0     # Reward for moving toward the last known location.
+        decay_factor = 0.01                # Decay per time step since last seen.
+        energy_penalty_weight = 0.1        # Penalty for large movements.
+        time_penalty = 1.0                 # Constant penalty per time step.
+
         total_reward = 0.0
-        
-        # Track if any robot can see the target
-        target_visible_to_any = False
-        last_known_positions = []
-        visitation_stats = []
-        
-        # First pass to gather information
-        for i, robot_pos in enumerate(self.cca_positions):
-            # Get current robot's subgrid and its statistics
-            current_subgrid = self._extract_subgrid(robot_pos)
-            current_avg = np.mean(current_subgrid)
-            current_min = np.min(current_subgrid)
-            current_max = np.max(current_subgrid)
-            
-            # Previous subgrid for comparison
-            previous_subgrid = self.robot_obs_history[i][-2] if len(self.robot_obs_history[i]) >= 2 else current_subgrid
-            previous_avg = np.mean(previous_subgrid)
-            
-            # Store stats for later coordination calculations
-            visitation_stats.append((current_avg, current_min, current_max))
-            
-            # Check if target is visible to this robot
-            half = self.robot_observable_radius // 2
-            is_target_visible = np.all(self.foxtrot_position >= (robot_pos - half)) and np.all(self.foxtrot_position <= (robot_pos + half))
-            
-            if is_target_visible:
-                target_visible_to_any = True
-                last_known_positions.append((self.foxtrot_position.copy(), self.current_step))
-        
-        # If we have no last known positions but have class storage, initialize it
-        if not hasattr(self, 'last_known_target_pos'):
-            self.last_known_target_pos = None
-            self.last_seen_step = -1000  # Start with a high negative value
-        
-        # Update last known position if target is visible
-        if target_visible_to_any and last_known_positions:
-            # Take the most recent sighting
-            self.last_known_target_pos, self.last_seen_step = max(last_known_positions, key=lambda x: x[1])
-        
-        # Second pass to calculate rewards for each robot
-        for i, robot_pos in enumerate(self.cca_positions):
-            robot_reward = 0.0
-            
-            # Extract data about current and previous positions/observations
-            current_subgrid = self._extract_subgrid(robot_pos)
-            current_avg = visitation_stats[i][0]
-            previous_subgrid = self.robot_obs_history[i][-2] if len(self.robot_obs_history[i]) >= 2 else current_subgrid
-            previous_avg = np.mean(previous_subgrid)
-            
-            # Get robot movement
+        num = self.num_cca
+
+        # --- Compute spread reward (for Case 1) ---
+        spread_reward = 0.0
+        for i in range(num):
+            for j in range(i+1, num):
+                dist = np.linalg.norm(self.cca_positions[i] - self.cca_positions[j])
+                spread_reward += dist
+        if num > 1:
+            spread_reward /= (num * (num-1) / 2)
+
+        # --- Determine target visibility for each robot ---
+        target_in_sight = False
+        robot_visible = [False] * num
+        half = self.robot_observable_radius // 2
+        for i, pos in enumerate(self.cca_positions):
+            if np.all(self.foxtrot_position >= (pos - half)) and np.all(self.foxtrot_position <= (pos + half)):
+                robot_visible[i] = True
+                target_in_sight = True
+
+        # --- Check for last known target location ---
+        last_known_available = (hasattr(self, 'last_known_target_pos') and self.last_known_target_pos is not None)
+        if last_known_available:
+            time_since_last = self.current_step - self.last_seen_step
+        else:
+            time_since_last = None
+
+        # --- Switch-case reward logic ---
+        # Case 2: Target in sight
+        if target_in_sight:
+            for i, pos in enumerate(self.cca_positions):
+                dist = np.linalg.norm(pos - self.foxtrot_position)
+                # Reward inversely proportional to distance
+                reward_i = intercept_reward_weight * (1 - np.clip(dist / self.robot_observable_radius, 0, 1))
+                # Extra bonus for the robot that sees the target: alignment bonus
+                if robot_visible[i]:
+                    movement = self.cca_history[i][-1] - self.cca_history[i][-2]
+                    if np.linalg.norm(movement) > 0:
+                        movement_unit = movement / np.linalg.norm(movement)
+                        target_dir = self.foxtrot_position - pos
+                        if np.linalg.norm(target_dir) > 0:
+                            target_unit = target_dir / np.linalg.norm(target_dir)
+                            alignment = np.dot(movement_unit, target_unit)
+                        else:
+                            alignment = 1.0
+                    else:
+                        alignment = 0.0
+                    reward_i += alignment_reward_weight * np.clip(alignment, 0, 1)
+                total_reward += reward_i
+            total_reward /= num
+
+        # Case 3: No target in sight but last known target available
+        elif last_known_available:
+            # Decay factor reduces incentive as time since last seen increases
+            decay = max(0, 1 - decay_factor * (self.current_step - self.last_seen_step))
+            for i, pos in enumerate(self.cca_positions):
+                dist = np.linalg.norm(pos - self.last_known_target_pos)
+                reward_i = last_known_reward_weight * decay * (1 - np.clip(dist / self.robot_observable_radius, 0, 1))
+                total_reward += reward_i
+            total_reward /= num
+
+        # Case 1: No target in sight and no last known target
+        else:
+            # Encourage exploration by rewarding robot dispersion
+            total_reward = spread_reward_weight * (spread_reward / self.grid_size)
+
+        # --- Energy penalty: Penalize excessive movement ---
+        energy_penalty_total = 0.0
+        for i in range(num):
             movement = self.cca_history[i][-1] - self.cca_history[i][-2]
-            movement_magnitude = np.linalg.norm(movement)
-            
-            # Check if target is visible to this specific robot
-            half = self.robot_observable_radius // 2
-            is_target_visible = np.all(self.foxtrot_position >= (robot_pos - half)) and np.all(self.foxtrot_position <= (robot_pos + half))
-            
-            if is_target_visible:
-                # Calculate distance to target and normalized distance (0 = at target, 1 = at observation boundary)
-                dist_to_target = np.linalg.norm(robot_pos - self.foxtrot_position)
-                normalized_dist = np.clip(dist_to_target / self.robot_observable_radius, 0, 1)
-                
-                # Big reward just for having target in view
-                robot_reward += target_visible_weight
-                
-                # Add capture reward if very close
-                if dist_to_target <= self.capture_radius:
-                    robot_reward += capture_reward
-                
-                # Add distance-based component (higher as robot gets closer)
-                robot_reward += distance_weight * (1 - normalized_dist)
-                
-                # Add alignment reward if moving toward target
-                if movement_magnitude > 0:
-                    movement_unit = movement / movement_magnitude
-                    target_dir = self.foxtrot_position - robot_pos
-                    if np.linalg.norm(target_dir) > 0:
-                        target_unit = target_dir / np.linalg.norm(target_dir)
-                        alignment = np.dot(movement_unit, target_unit)
-                        robot_reward += alignment_weight * np.clip(alignment, 0, 1)
-            
-            else:  # Target not visible - focus on exploration
-                # Base exploration reward - inversely proportional to cell visit count
-                # Higher reward for cells with lower visitation
-                novelty_factor = np.exp(-current_avg / 2)  # Exponential decay function for novelty
-                robot_reward += exploration_weight * novelty_factor
-                
-                # Bonus for finding area with even lower counts than before
-                if current_avg < previous_avg:
-                    improvement = previous_avg - current_avg
-                    robot_reward += novelty_bonus * improvement
-                
-                # Penalty for revisiting already heavily visited cells
-                if current_avg > 3:  # Only penalize if average count is significant
-                    robot_reward -= revisit_penalty * current_avg
-                
-                # If we have a last known position and it's relatively recent, provide guidance
-                if self.last_known_target_pos is not None:
-                    steps_since_last_seen = self.current_step - self.last_seen_step
-                    
-                    # Only use last known position if it's not too old (within 100 steps)
-                    if steps_since_last_seen < 100:
-                        # Calculate direction to last known position
-                        last_known_dir = self.last_known_target_pos - robot_pos
-                        last_known_dist = np.linalg.norm(last_known_dir)
-                        
-                        # If robot is moving and not too close to last known pos
-                        if movement_magnitude > 0 and last_known_dist > 5:
-                            # Normalize directions
-                            movement_unit = movement / movement_magnitude
-                            last_known_unit = last_known_dir / last_known_dist
-                            
-                            # Calculate alignment with last known position
-                            memory_alignment = np.dot(movement_unit, last_known_unit)
-                            
-                            # Weight decreases as time passes since last sighting
-                            time_decay = max(0, 1 - steps_since_last_seen / 100)
-                            robot_reward += last_seen_weight * np.clip(memory_alignment, 0, 1) * time_decay
-                
-                # Entropy bonus: reward for diverse movement patterns
-                if len(self.action_history[i]) >= 3:
-                    recent_actions = self.action_history[i][-3:]
-                    # Calculate variance of recent actions as a measure of exploration diversity
-                    action_variance = np.mean(np.var(recent_actions, axis=0))
-                    robot_reward += entropy_bonus * min(1.0, action_variance)
-            
-            # Add movement efficiency penalty
-            energy_cost = energy_penalty * movement_magnitude
-            robot_reward -= energy_cost
-            
-            # Add coordination bonus if robots are exploring different areas
-            # This incentivizes robots to spread out when exploring
-            if len(self.cca_positions) > 1 and not is_target_visible:
-                # Calculate average distance to other robots
-                distances_to_others = []
-                for j, other_pos in enumerate(self.cca_positions):
-                    if i != j:
-                        dist = np.linalg.norm(robot_pos - other_pos)
-                        distances_to_others.append(dist)
-                
-                if distances_to_others:
-                    # Higher reward for being farther from other robots (encouraging spread)
-                    avg_distance = np.mean(distances_to_others)
-                    normalized_distance = min(1.0, avg_distance / (self.grid_size / 4))  # Normalize by 1/4 of grid size
-                    robot_reward += coordination_weight * normalized_distance
-            
-            # Add this robot's reward to total
-            total_reward += robot_reward
-        
-        # Average rewards across all robots
-        total_reward /= max(1, self.num_cca)
-        
-        # Global time penalty
+            energy_penalty_total += np.linalg.norm(movement)
+        energy_penalty_total *= energy_penalty_weight
+        total_reward -= energy_penalty_total
+
+        # --- Global time penalty ---
         total_reward -= time_penalty
-        
+
+        # --- Update last known target location if target is visible ---
+        if target_in_sight:
+            self.last_known_target_pos = self.foxtrot_position.copy()
+            self.last_seen_step = self.current_step
+
         if REWARD_DEBUG:
-            distances_str = ", ".join([f"CCA_{i}: {np.linalg.norm(self.cca_positions[i]-self.foxtrot_position):.2f}"
-                                    for i in range(self.num_cca)])
-            visibility_str = ", ".join([f"CCA_{i}: {'✓' if np.all(self.foxtrot_position >= (self.cca_positions[i] - self.robot_observable_radius//2)) and np.all(self.foxtrot_position <= (self.cca_positions[i] + self.robot_observable_radius//2)) else '✗'}"
-                                    for i in range(self.num_cca)])
-            print(f"Step: {self.current_step} | Visibility: [{visibility_str}] | Distances: [{distances_str}] | Reward: {total_reward:.2f}")
-        
+            vis_str = ", ".join([f"CCA_{i}: {'✓' if robot_visible[i] else '✗'}" for i in range(num)])
+            dist_str = ", ".join([f"{np.linalg.norm(self.cca_positions[i]-self.foxtrot_position):.2f}" for i in range(num)])
+            print(f"Step {self.current_step} | Visibility: [{vis_str}] | Distances: [{dist_str}] | Reward: {total_reward:.2f}")
+
         return total_reward
         
     # Updated _extract_subgrid() method:
+    # Add the new _extract_observation() method to PPOEnv (replace the old _extract_subgrid if present):
     def _extract_subgrid(self, position):
+        """
+        Compute a summary observation vector for the observable region around a robot.
+        The observable region is a cube of side length `self.robot_observable_radius` centered on `position`.
+        If the target (Foxtrot) is within this region, return:
+            [ -1, target_x, target_y, target_z, 0 ]
+        Otherwise, return:
+            [ sum, last_known_target_x, last_known_target_y, last_known_target_z, counter ]
+        where `sum` is the sum of all grid cell values in the observable region,
+        and `counter` is the number of time steps since the target was last seen (or -1 if never seen).
+        """
         half = self.robot_observable_radius // 2
-        r = self.robot_observable_radius
-        # Create a subgrid with shape (r, r, r, 2)
-        subgrid = np.zeros((r, r, r, 2), dtype=np.float32)
-        
-        # Define bounds for subgrid in global grid
+        # Define bounds for the observable region
         x_min = position[0] - half
         y_min = position[1] - half
         z_min = position[2] - half
-        x_max = x_min + r
-        y_max = y_min + r
-        z_max = z_min + r
+        x_max = x_min + self.robot_observable_radius
+        y_max = y_min + self.robot_observable_radius
+        z_max = z_min + self.robot_observable_radius
 
-        grid = self.grid.grid
-        # Determine overlapping bounds with the global grid
-        grid_x_min = max(x_min, 0)
-        grid_y_min = max(y_min, 0)
-        grid_z_min = max(z_min, 0)
-        grid_x_max = min(x_max, self.grid_size)
-        grid_y_max = min(y_max, self.grid_size)
-        grid_z_max = min(z_max, self.grid_size)
+        # Clip bounds to grid limits
+        x_min_clip = max(x_min, 0)
+        y_min_clip = max(y_min, 0)
+        z_min_clip = max(z_min, 0)
+        x_max_clip = min(x_max, self.grid_size)
+        y_max_clip = min(y_max, self.grid_size)
+        z_max_clip = min(z_max, self.grid_size)
 
-        # Compute starting indices for placing grid values into subgrid
-        sub_x_min = grid_x_min - x_min
-        sub_y_min = grid_y_min - y_min
-        sub_z_min = grid_z_min - z_min
+        # Extract the subgrid using slicing (this is vectorized)
+        grid_slice = self.grid.grid[x_min_clip:x_max_clip, y_min_clip:y_max_clip, z_min_clip:z_max_clip]
 
-        for xi, i in zip(range(grid_x_min, grid_x_max), range(sub_x_min, sub_x_min + (grid_x_max - grid_x_min))):
-            for yj, j in zip(range(grid_y_min, grid_y_max), range(sub_y_min, sub_y_min + (grid_y_max - grid_y_min))):
-                for zk, k in zip(range(grid_z_min, grid_z_max), range(sub_z_min, sub_z_min + (grid_z_max - grid_z_min))):
-                    cell = grid[xi, yj, zk]
-                    # Get cell value (if tuple, take its first element)
-                    value = cell[0] if isinstance(cell, tuple) else cell
-                    subgrid[i, j, k, 0] = value
-                    # Compute compressed coordinate as a normalized linear index
-                    compressed = (xi * (self.grid_size ** 2) + yj * self.grid_size + zk) / (self.grid_size ** 3 - 1)
-                    subgrid[i, j, k, 1] = compressed
-        return subgrid
+        # Define a vectorized function to extract the integer value of each cell
+        get_value = np.vectorize(lambda cell: cell[0] if isinstance(cell, tuple) else cell)
+        cell_values = get_value(grid_slice)
+        sum_val = np.sum(cell_values)
+
+        # Check if target is within the observable region
+        region_min = np.array([x_min, y_min, z_min])
+        region_max = np.array([x_max, y_max, z_max])
+        target_visible = np.all(self.foxtrot_position >= region_min) and np.all(self.foxtrot_position < region_max)
+
+        if target_visible:
+            obs_vec = np.array([-1, self.foxtrot_position[0], self.foxtrot_position[1], self.foxtrot_position[2], 0], dtype=np.float32)
+            self.last_known_target_pos = self.foxtrot_position.copy()
+            self.last_seen_step = self.current_step
+        else:
+            if hasattr(self, 'last_known_target_pos') and self.last_known_target_pos is not None:
+                last_known = self.last_known_target_pos
+                counter = self.current_step - self.last_seen_step
+            else:
+                last_known = np.array([0, 0, 0], dtype=np.float32)
+                counter = -1
+            obs_vec = np.array([sum_val, last_known[0], last_known[1], last_known[2], counter], dtype=np.float32)
+        return obs_vec
     
 if __name__ == "__main__":
 
@@ -485,7 +414,7 @@ if __name__ == "__main__":
     vec_env = VecNormalize(vec_env, norm_obs=True, norm_reward=True)
     policy_kwargs = dict(
         features_extractor_class=Transformer,
-        features_extractor_kwargs=dict(embed_dim=64, num_heads=8, ff_hidden=64*4, num_layers=4, seq_len=9),
+        features_extractor_kwargs=dict(embed_dim=64, num_heads=4, ff_hidden=64*3, num_layers=3, seq_len=3),
         net_arch = dict(pi = [128,128,64],vf=[128,256,256,64]) #use keyword (pi) for policy network architecture -> additional ffn for decoding output, (vf) for reward func
     )
 
@@ -507,7 +436,7 @@ if __name__ == "__main__":
         vf_coef = 0.65, # Lower reliance on v(s) to compute advantage which is then used to compute Loss -> Gradient
         clip_range=0.4, # Clips larger updates to remain within +- 60%
         #ent_coef=0.05,
-        #tensorboard_log="./Patrol&Proetect_PPO/ppo_patrol_tensorboard/"
+        #tensorboard_log="./Search&Intercept/logs/"
     )
 
     """
