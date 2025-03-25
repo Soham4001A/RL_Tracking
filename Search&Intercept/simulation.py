@@ -22,16 +22,10 @@ class PPOEnv(gym.Env):
         super(PPOEnv, self).__init__()
         self.grid_size = grid_size
         self.num_cca = num_cca
-        # Initialize grid using the GridSpace class
+        # Initialize grid using the GridSpace class 
         self.grid = GridSpace(self.grid_size)
         # Define the observable radius for a robot (adjustable as needed)
-        self.robot_observable_radius = 100
-
-        # ------------------------------
-        # GRPO-related parameters
-        # ------------------------------
-        self.sub_step_count = 0  # tracks how many sub-steps have occurred in the current macro-step
-        # ------------------------------
+        self.robot_observable_radius = 60
 
         self.current_step = 0
         self.max_steps = 600  # Episode Length
@@ -39,15 +33,11 @@ class PPOEnv(gym.Env):
 
         # Reward Function Utils
         self.capture_radius = globals.step_size
-        self.collision_radius = 1
-        self.alpha_capture_radius = 20
-        self.beta_capture_radius = 50
-        self.charlie_capture_radius = 75
 
         # Action space: Continuous movement in 3D space
         self.action_space = spaces.MultiDiscrete([2 * step_size + 1] * (self.num_cca * 3))
 
-        obs_dim = 6 * self.num_cca * (self.robot_observable_radius ** 3)
+        obs_dim = 6 * self.num_cca * ((self.robot_observable_radius ** 3) * 2) + (self.num_cca * 3)     
         self.observation_space = spaces.Box(
             low=0,
             high=np.inf,
@@ -86,7 +76,6 @@ class PPOEnv(gym.Env):
         self.cube_state = {}
         # Reset counters
         self.current_step = 0
-        self.sub_step_count = 0  # Reset sub-step count too
 
         self.action_history = [np.zeros((6, 3), dtype=np.float32) for _ in range(self.num_cca)]
         self.cca_history = [np.tile(pos, (6, 1)) for pos in self.cca_positions]
@@ -218,10 +207,12 @@ class PPOEnv(gym.Env):
 
     def _get_observation(self):
         obs_list = []
-        for t in range(6):  # for each time step in history
-            for i in range(self.num_cca):  # for each robot
+        for t in range(6):  # For each time step in history
+            for i in range(self.num_cca):  # For each robot
                 obs_list.append(self.robot_obs_history[i][t].flatten())
-        return np.concatenate(obs_list).astype(np.float32)
+        # Append positions of all robots (each position is 3 values)
+        robot_positions = np.concatenate([pos for pos in self.cca_positions])
+        return np.concatenate(obs_list + [robot_positions]).astype(np.float32)
 
     def _decode_action(self, action):
         """Decode a discrete action for a single robot into a movement vector in [-step_size, step_size]."""
@@ -253,14 +244,14 @@ class PPOEnv(gym.Env):
         capture_reward = 5000.0       # High reward for reaching target
         target_visible_weight = 1000.0 # Substantial bonus just for having target visible
         distance_weight = 800.0       # Reward component based on proximity when visible
-        exploration_weight = 400.0    # Base reward for exploring low-count cells
-        novelty_bonus = 300.0         # Additional reward for finding new/low-count areas
-        last_seen_weight = 200.0      # Weight for moving toward last known position
+        exploration_weight = 300.0    # Base reward for exploring low-count cells
+        novelty_bonus = 100.0         # Additional reward for finding new/low-count areas
+        last_seen_weight = 100.0      # Weight for moving toward last known position
         coordination_weight = 150.0   # Reward for robots exploring different areas
-        alignment_weight = 100.0      # Reward for moving toward target when visible
-        entropy_bonus = 50.0          # Reward for diverse movement patterns
+        alignment_weight = 400.0      # Reward for moving toward target when visible
+        entropy_bonus = 25.0          # Reward for diverse movement patterns
         energy_penalty = 0.1          # Small penalty for large movements
-        revisit_penalty = 2.0         # Penalty for revisiting high-count cells
+        revisit_penalty = 100.0         # Penalty for revisiting high-count cells
         time_penalty = 1.0            # Small constant penalty to encourage efficiency
         
         total_reward = 0.0
@@ -428,43 +419,45 @@ class PPOEnv(gym.Env):
         
         return total_reward
         
+    # Updated _extract_subgrid() method:
     def _extract_subgrid(self, position):
         half = self.robot_observable_radius // 2
-        # Create a subgrid filled with zeros of the desired shape.
-        subgrid = np.zeros((self.robot_observable_radius,
-                            self.robot_observable_radius,
-                            self.robot_observable_radius), dtype=np.float32)
-        # Define the bounds for the subgrid in the global grid
+        r = self.robot_observable_radius
+        # Create a subgrid with shape (r, r, r, 2)
+        subgrid = np.zeros((r, r, r, 2), dtype=np.float32)
+        
+        # Define bounds for subgrid in global grid
         x_min = position[0] - half
         y_min = position[1] - half
         z_min = position[2] - half
-        x_max = x_min + self.robot_observable_radius
-        y_max = y_min + self.robot_observable_radius
-        z_max = z_min + self.robot_observable_radius
+        x_max = x_min + r
+        y_max = y_min + r
+        z_max = z_min + r
 
         grid = self.grid.grid
-        # Calculate the overlapping region with the global grid
+        # Determine overlapping bounds with the global grid
         grid_x_min = max(x_min, 0)
         grid_y_min = max(y_min, 0)
         grid_z_min = max(z_min, 0)
         grid_x_max = min(x_max, self.grid_size)
         grid_y_max = min(y_max, self.grid_size)
         grid_z_max = min(z_max, self.grid_size)
-        
-        # Determine where to place the overlapping values in the subgrid
+
+        # Compute starting indices for placing grid values into subgrid
         sub_x_min = grid_x_min - x_min
         sub_y_min = grid_y_min - y_min
         sub_z_min = grid_z_min - z_min
-        
+
         for xi, i in zip(range(grid_x_min, grid_x_max), range(sub_x_min, sub_x_min + (grid_x_max - grid_x_min))):
             for yj, j in zip(range(grid_y_min, grid_y_max), range(sub_y_min, sub_y_min + (grid_y_max - grid_y_min))):
                 for zk, k in zip(range(grid_z_min, grid_z_max), range(sub_z_min, sub_z_min + (grid_z_max - grid_z_min))):
                     cell = grid[xi, yj, zk]
-                    # If cell is a tuple, use its integer count; otherwise, use the cell value directly.
-                    if isinstance(cell, tuple):
-                        subgrid[i, j, k] = cell[0]
-                    else:
-                        subgrid[i, j, k] = cell
+                    # Get cell value (if tuple, take its first element)
+                    value = cell[0] if isinstance(cell, tuple) else cell
+                    subgrid[i, j, k, 0] = value
+                    # Compute compressed coordinate as a normalized linear index
+                    compressed = (xi * (self.grid_size ** 2) + yj * self.grid_size + zk) / (self.grid_size ** 3 - 1)
+                    subgrid[i, j, k, 1] = compressed
         return subgrid
     
 if __name__ == "__main__":
@@ -492,7 +485,7 @@ if __name__ == "__main__":
     vec_env = VecNormalize(vec_env, norm_obs=True, norm_reward=True)
     policy_kwargs = dict(
         features_extractor_class=Transformer,
-        features_extractor_kwargs=dict(embed_dim=64, num_heads=8, ff_hidden=64*4, num_layers=4, seq_len=6),
+        features_extractor_kwargs=dict(embed_dim=64, num_heads=8, ff_hidden=64*4, num_layers=4, seq_len=9),
         net_arch = dict(pi = [128,128,64],vf=[128,256,256,64]) #use keyword (pi) for policy network architecture -> additional ffn for decoding output, (vf) for reward func
     )
 
@@ -506,7 +499,7 @@ if __name__ == "__main__":
         use_sde = False, # Essentially reducing delta of actions when rewards are very positive (breaks it while initially learning)
         #sde_sample_freq = 3,
         learning_rate=linear_schedule(initial_value= 0.0003),
-        samples_per_time_step= 5,
+        samples_per_time_step= 2,
         n_steps=600, # Steps per learning update
         batch_size=100,
         gamma=0.85,
@@ -548,10 +541,10 @@ if __name__ == "__main__":
     globals.RECTANGULAR_FOXTROT = False
     globals.RAND_FIXED_CCA = True
     globals.PROXIMITY_CCA = False
-    model.learn(total_timesteps=30_000)
+    model.learn(total_timesteps=180_000)
 
     globals.RAND_FIXED_CCA = False
-    model.learn(total_timesteps=90_000)
+    model.learn(total_timesteps=180_000)
 
     # Save the model
     model.save("./PPO_V2/Trained_Model")
