@@ -96,6 +96,9 @@ class PPOEnv(gym.Env):
         # --- Reward Function Utils (Store as attributes) ---
         self.capture_radius = 15.0  # Radius for successful capture bonus/termination
         self.cca_collision_radius = 5.0 # Radius for CCA-CCA collision penalty
+        self.cell_visit_counts = {} # Dictionary to store counts per grid cell
+        self.grid_resolution = 20 # Size of grid cells for visit count (tune this)
+        self.history_len = 200 # Store history length
 
         print(f"\nPPOEnv Initialized for Multi-Agent Partial Observability:")
         print(f"  Num CCAs: {self.num_cca}")
@@ -104,52 +107,56 @@ class PPOEnv(gym.Env):
         print(f"  Action Space: {self.action_space}")
         print(f"  Observation Space: {self.observation_space}")
 
+    def _pos_to_grid_cell(self, position):
+        """Converts a 3D position to a discrete grid cell tuple."""
+        return tuple((position // self.grid_resolution).astype(int))
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
         self.current_step = 0
-        self.previous_potential = None
+        self.previous_avg_distance_to_target = None # Reset for reward calc
         self.was_observable_prev_step = False
-        self.previous_avg_distance = None
-        self.previous_cca_positions = None
 
-        # --- Reset Foxtrot (Stationary, Random Position) ---
-        # Ensure STATIONARY_FOXTROT and RAND_POS are True in globals or config
+        # Reset Foxtrot (Stationary, Random Position)
         initial_foxtrot_pos = self.np_random.integers(0, self.grid_size, size=3).astype(float)
+        if self.foxtrot_obj is None: self.foxtrot_obj = Foxtrot("Foxtrot_0", initial_foxtrot_pos)
+        else: self.foxtrot_obj.set_position(initial_foxtrot_pos); self.foxtrot_obj.path = [initial_foxtrot_pos.copy()]
 
-        if self.foxtrot_obj is None:
-            self.foxtrot_obj = Foxtrot("Foxtrot_0", initial_foxtrot_pos)
-        else:
-            self.foxtrot_obj.set_position(initial_foxtrot_pos)
-            self.foxtrot_obj.path = [initial_foxtrot_pos.copy()]
-
-        # --- Reset CCAs (Random Positions) ---
-        # Ensure PROXIMITY_CCA and RAND_FIXED_CCA are False
+        # Reset CCAs (Random Positions)
         self.cca_objs = []
+        min_start_sep = 10.0 # Ensure agents don't start exactly on top of each other
         for i in range(self.num_cca):
-            initial_cca_pos = self.np_random.integers(0, self.grid_size, size=3).astype(float)
-            # Ensure CCAs don't start too close to each other (simple check)
-            if i > 0 and np.linalg.norm(initial_cca_pos - self.cca_objs[0].position) < self.cca_collision_radius * 2:
-                 initial_cca_pos = self.np_random.integers(0, self.grid_size, size=3).astype(float) # Try again
+            while True: # Keep trying until a suitable position is found
+                 initial_cca_pos = self.np_random.integers(0, self.grid_size, size=3).astype(float)
+                 is_too_close = False
+                 for j in range(len(self.cca_objs)):
+                     if np.linalg.norm(initial_cca_pos - self.cca_objs[j].position) < min_start_sep:
+                         is_too_close = True
+                         break
+                 if not is_too_close:
+                     break # Found a good position
             self.cca_objs.append(CCA(f"CCA_{i}", initial_cca_pos))
-        self.previous_cca_positions = [cca.position.copy() for cca in self.cca_objs]
 
-        # --- Reset Histories ---
-        hist_len = self.observation_history_len
-        self.action_history = [np.zeros((hist_len, 3), dtype=np.float32) for _ in range(self.num_cca)]
-        self.cca_history = [np.tile(cca.position, (hist_len, 1)) for cca in self.cca_objs]
-        # Foxtrot history starts assuming it's not observable
-        initial_obs_foxtrot = PLACEHOLDER_POS
-        self.foxtrot_history = np.tile(initial_obs_foxtrot, (hist_len, 1)) # Fill with placeholder initially
+        # Reset Histories
+        self.action_history = [np.zeros((self.history_len, 3), dtype=np.float32) for _ in range(self.num_cca)]
+        self.cca_history = [np.tile(cca.position, (self.history_len, 1)) for cca in self.cca_objs]
+        is_observable_init = any(np.linalg.norm(cca.position - self.foxtrot_obj.position) < self.observable_radius for cca in self.cca_objs)
+        initial_obs_foxtrot = self.foxtrot_obj.position if is_observable_init else PLACEHOLDER_POS
+        self.foxtrot_history = np.tile(initial_obs_foxtrot, (self.history_len, 1))
+        self.was_observable_prev_step = is_observable_init
 
-        if POSITIONAL_DEBUG:
-            print(f"\n--- ENV RESET (Step 0) ---")
-            print(f"{self.foxtrot_obj.name} at {self.foxtrot_obj.position}")
-            for cca in self.cca_objs: print(f"{cca.name} at {cca.position}")
-            print("--------------------------\n")
+        # --- Reset Exploration State ---
+        self.cell_visit_counts = {}
+        # Pre-populate with initial positions
+        for cca in self.cca_objs:
+            cell = self._pos_to_grid_cell(cca.position)
+            self.cell_visit_counts[cell] = self.cell_visit_counts.get(cell, 0) + 1
+        # -----------------------------
+
+        if POSITIONAL_DEBUG: print(f"\n--- ENV RESET ---\n{self.foxtrot_obj.name} @ {self.foxtrot_obj.position}\n"+"\n".join([f"{c.name} @ {c.position}" for c in self.cca_objs])+"\n--------------")
 
         observation = self._get_observation()
-        info = {"reset_complete": True}
+        info = {"initial_observability": is_observable_init}
         return observation, info
 
     def step(self, actions):
@@ -222,18 +229,37 @@ class PPOEnv(gym.Env):
 
     def _calculate_reward(self, actions=None, is_observable_now=False):
         """
-        Simplified reward: Distance penalty + Spread bonus (if hidden).
+        Reward function with distinct normalization targets:
+        - Intercept Mode (Visible): Rewards primarily in [0, 500] (Positive = good)
+        - Search Mode (Hidden): Rewards primarily in [-500, 0] (Negative = bad, less negative = better)
         """
-        # --- Parameters (Tune these!) ---
-        distance_penalty_coeff = 0.8  # Penalty multiplier for avg distance to target (Positive value)
-        spread_bonus_coeff = 0.4     # Bonus multiplier for distance between CCAs (Positive value)
+        # --- Parameters (Tune!) ---
+        # Target range scales
+        INTERCEPT_REWARD_SCALE = 500.0
+        SEARCH_REWARD_SCALE = 500.0 # Max magnitude for negative search rewards
 
-        capture_bonus = 1000.0        # Bonus for successful capture
-        time_penalty = -0.5           # Smaller time penalty?
-        cca_collision_penalty = -5.0  # Penalty if CCAs get too close
-        energy_penalty_coeff = 0.005  # Smaller energy penalty?
+        # Intercept (Visible) Weights (Should sum to 1.0 for normalized range)
+        w_progress = 1.0 # Weight for normalized progress towards target
 
-        reward = 0.0
+        # Search (Hidden) Weights (Should sum to 1.0 for normalized range)
+        w_proximity = 0.6  # Weight for proximity penalty (closer CCAs = more penalty)
+        w_revisit = 0.4    # Weight for revisit penalty
+
+        # Shared Components
+        capture_bonus = 1000.0 # Keep large bonus outside normalized range
+        find_bonus = 200.0     # Bonus for finding target
+        time_penalty = -0.5    # Small penalty per step
+        cca_collision_penalty = -10.0 # Direct collision penalty
+        energy_penalty_coeff = 0.005 # Energy use penalty
+
+        # Normalization helpers
+        max_dist_change_norm = 1.0 * step_size # Approx max progress per step
+        # Target separation for normalization (used to define PROXIMITY)
+        # Max possible separation is grid_size*sqrt(3), avg is complex.
+        # Let's normalize proximity based on collision radius instead.
+        # Proximity = 1 if dist=0, 0 if dist > threshold
+        proximity_threshold = self.cca_collision_radius * 10 # e.g., 50 units apart penalizes
+        max_revisit_penalty_norm = 10.0 # Estimated max raw revisit penalty (tune!)
 
         # --- Calculate Current State ---
         current_cca_positions = [cca.position for cca in self.cca_objs]
@@ -241,52 +267,110 @@ class PPOEnv(gym.Env):
         if not current_cca_positions or len(current_cca_positions) != self.num_cca: return 0.0
 
         # --- Calculate Distances ---
-        avg_dist_to_foxtrot = np.mean([np.linalg.norm(pos - current_foxtrot_position) for pos in current_cca_positions])
+        current_avg_distance = np.mean([np.linalg.norm(pos - current_foxtrot_position) for pos in current_cca_positions])
         min_dist_to_foxtrot = min(np.linalg.norm(pos - current_foxtrot_position) for pos in current_cca_positions)
-        dist_cca = 0.0
+        avg_cca_separation = 0.0 # Not directly used in reward now, but useful for debug
+        min_cca_dist = float('inf')
         if self.num_cca > 1:
-            dist_cca = np.linalg.norm(current_cca_positions[0] - current_cca_positions[1])
+            pair_count = 0
+            for i in range(self.num_cca):
+                for j in range(i + 1, self.num_cca):
+                    dist_ij = np.linalg.norm(current_cca_positions[i] - current_cca_positions[j])
+                    avg_cca_separation += dist_ij
+                    min_cca_dist = min(min_cca_dist, dist_ij)
+                    pair_count += 1
+            if pair_count > 0: avg_cca_separation /= pair_count
 
-        # --- Apply Rewards/Penalties ---
+        # --- Initialize Reward ---
+        reward = 0.0
+        mode_reward_scaled = 0.0 # Store the scaled mode-specific reward for debugging
 
-        # 1. Raw Distance Penalty (Always active)
-        reward -= distance_penalty_coeff * avg_dist_to_foxtrot
+        # --- Mode-Dependent Rewards ---
+        if is_observable_now:
+            # --- Mode 1: Intercept ---
+            mode = "Intercept"
+            # Calculate normalized progress reward [0, w_progress]
+            progress_reward_normalized_component = 0.0
+            if self.previous_avg_distance_to_target is not None:
+                distance_reduction = self.previous_avg_distance_to_target - current_avg_distance
+                normalized_progress = np.clip(distance_reduction / (max_dist_change_norm + 1e-6), -1.0, 1.0)
+                progress_reward_normalized_component = w_progress * (normalized_progress + 1.0) / 2.0
 
-        # 2. Spread Bonus (ONLY if Foxtrot is HIDDEN)
-        if not is_observable_now and self.num_cca > 1:
-            # Reward based on distance between CCAs
-            reward += spread_bonus_coeff * dist_cca
+            # Scale to target range [0, 500 * w_progress]
+            mode_reward_scaled = progress_reward_normalized_component * INTERCEPT_REWARD_SCALE
+            reward += mode_reward_scaled
 
-        # 3. Time Penalty (Always active)
+            # Add find bonus (one-time)
+            if not self.was_observable_prev_step: reward += find_bonus
+
+        else:
+            # --- Mode 2: Search ---
+            mode = "Search"
+            # 1. Proximity Penalty Score (Normalized [0, 1], higher means closer/worse)
+            proximity_score_normalized = 0.0
+            if self.num_cca > 1:
+                 # Linearly scale penalty from 1 (at collision radius) down to 0 (at threshold)
+                 proximity_score_normalized = np.clip(1.0 - (min_cca_dist - self.cca_collision_radius) / (proximity_threshold - self.cca_collision_radius + 1e-6), 0.0, 1.0)
+
+            # 2. Re-exploration Penalty Score (Normalized [0, 1], higher means more revisited)
+            revisit_penalty_raw = 0.0
+            current_cells = set()
+            for pos in current_cca_positions:
+                cell = self._pos_to_grid_cell(pos)
+                if cell not in current_cells:
+                    visit_count = self.cell_visit_counts.get(cell, 0)
+                    revisit_penalty_raw += math.sqrt(visit_count) # Penalty grows with visits
+                    self.cell_visit_counts[cell] = visit_count + 1
+                    current_cells.add(cell)
+            # Normalize the raw penalty based on expected max
+            revisit_score_normalized = np.clip(revisit_penalty_raw / (max_revisit_penalty_norm * self.num_cca + 1e-6), 0.0, 1.0)
+
+            # Calculate total *negative* reward for this mode, scaled to [-500 * (w_prox + w_revisit), 0]
+            proximity_penalty_scaled = - (w_proximity * proximity_score_normalized * SEARCH_REWARD_SCALE)
+            revisit_penalty_scaled = - (w_revisit * revisit_score_normalized * SEARCH_REWARD_SCALE)
+            mode_reward_scaled = proximity_penalty_scaled + revisit_penalty_scaled
+            reward += mode_reward_scaled
+
+
+        # --- Shared Components (Applied AFTER mode rewards) ---
+
+        # Capture Bonus (Can happen if visible)
+        if min_dist_to_foxtrot < self.capture_radius:
+            reward += capture_bonus # Added on top of any mode reward
+
+        # Add essential penalties AFTER scaling mode rewards
         reward += time_penalty
-
-        # 4. Energy Penalty (Always active)
         if actions is not None:
             action_magnitude_sq = np.sum(actions**2)
             reward -= energy_penalty_coeff * action_magnitude_sq
+        if self.num_cca > 1 and min_cca_dist < self.cca_collision_radius:
+            reward += cca_collision_penalty # Direct collision is heavily penalized
 
-        # 5. CCA-CCA Collision Penalty (Always active)
-        if self.num_cca > 1 and dist_cca < self.cca_collision_radius:
-            reward += cca_collision_penalty
-
-        # 6. Capture Bonus (Terminal reward)
-        if min_dist_to_foxtrot < self.capture_radius:
-            reward += capture_bonus
+        # --- Update State for Next Step ---
+        self.previous_avg_distance_to_target = current_avg_distance
+        # was_observable_prev_step is updated in step() method
 
         # --- Debug Printing ---
         if REWARD_DEBUG:
-            dist_str = ", ".join([f"{np.linalg.norm(p - current_foxtrot_position):.1f}" for p in current_cca_positions])
-            cca_dist_str = f"{dist_cca:.1f}" if self.num_cca > 1 else "N/A"
-            obs_status = "Visible" if is_observable_now else "Hidden "
-            capt_b = capture_bonus if min_dist_to_foxtrot < self.capture_radius else 0
-            cca_coll_p = cca_collision_penalty if self.num_cca > 1 and dist_cca < self.cca_collision_radius else 0
-            energy_p = -energy_penalty_coeff * action_magnitude_sq if actions is not None else 0
-            dist_p = -distance_penalty_coeff * avg_dist_to_foxtrot
-            spread_b = spread_bonus_coeff * dist_cca if not is_observable_now and self.num_cca > 1 else 0
+             dist_str = f"AvgD:{current_avg_distance:.1f},MinD:{min_dist_to_foxtrot:.1f}"
+             cca_dist_str = f"AvgSep:{avg_cca_separation:.1f},MinSep:{min_cca_dist:.1f}" if self.num_cca > 1 else "N/A"
+             obs_status = "Visible" if is_observable_now else "Hidden "
+             capt_b = capture_bonus if min_dist_to_foxtrot < self.capture_radius else 0
+             find_b = find_bonus if is_observable_now and not self.was_observable_prev_step else 0
+             cca_coll_p_direct = cca_collision_penalty if self.num_cca > 1 and min_cca_dist < self.cca_collision_radius else 0
+             energy_p = -energy_penalty_coeff * action_magnitude_sq if actions is not None else 0
 
-            print(f"Step {self.current_step}: Total={reward:.2f} | Fox={obs_status} | Dists=[{dist_str}] | CCA_Dist={cca_dist_str} | "
-                  f"DistP={dist_p:.2f} | SpreadB={spread_b:.2f} | CaptB={capt_b:.0f} | "
-                  f"CCACollP={cca_coll_p:.0f} | EnergyP={energy_p:.2f} | TimeP={time_penalty:.1f}")
+             prog_r_pr=0.0; sep_p_pr=0.0; rev_p_pr=0.0 # For printing only
+             if is_observable_now:
+                 prog_r_pr = mode_reward_scaled # Intercept mode reward
+             else:
+                 sep_p_pr = proximity_penalty_scaled # Search mode penalty part 1
+                 rev_p_pr = revisit_penalty_scaled   # Search mode penalty part 2
+
+             print(f"Step {self.current_step}: Total={reward:.2f} | M={mode} | Dists=[{dist_str}] | CCAs=[{cca_dist_str}] | "
+                   f"ModeRew={mode_reward_scaled:.1f} (ProgR={prog_r_pr:.1f} | ProxP={sep_p_pr:.1f} | RevisP={rev_p_pr:.1f}) | "
+                   f"FindB={find_b:.0f} | CaptB={capt_b:.0f} | CCACollP={cca_coll_p_direct:.0f} | EnergyP={energy_p:.2f} | TimeP={time_penalty:.1f}")
+
 
         return float(reward)
     
@@ -416,7 +500,7 @@ if __name__ == "__main__":
     # --- Training ---
     print("\nStarting Training (Multi-Agent, Partial Observability)...")
     # No curriculum for now, just train on the main task
-    total_train_steps = 600_000 # Define total steps for this phase
+    total_train_steps = 200_000 # Define total steps for this phase
 
     # Instantiate callbacks (optional plotting or others)
     # plot_callback = PlottingCallback(plot_freq=2048, log_dir=log_dir) # Example
@@ -432,11 +516,7 @@ if __name__ == "__main__":
         print("Training interrupted by user.")
     # Add other exception handling if needed
 
-    # --- Save Model and Environment Wrapper ---
-    save_dir = "./LMA_RL_MultiAgent_V1" # New save directory
-    os.makedirs(save_dir, exist_ok=True)
-    model_path = os.path.join(save_dir, "trained_model_multi_lma")
-    vec_env_path = os.path.join(save_dir, "trained_vecnormalize_multi_lma.pkl")
+    # --- Save Model and Environment Wrapper ---)
 
     # --- Workaround for TensorFlow/TensorBoard Pickle Error ---
     #print("Temporarily disabling logger before saving...")

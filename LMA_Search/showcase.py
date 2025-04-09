@@ -1,142 +1,243 @@
-from simulation import PPOEnv
-import globals
 import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
-from matplotlib.animation import FuncAnimation
+from matplotlib.animation import FuncAnimation, PillowWriter # Added PillowWriter for GIF saving
+import os
+
+# Stable Baselines and Environment Import
 from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
+from simulation import PPOEnv # Import the PPOEnv class from the classes module
+import globals # Import globals to set flags
 
-# Visualization parameters
-NUM_CCA = globals.num_cca
-STEPS = 10000
+# --- Visualization Parameters ---
+NUM_CCA = 4 # **** UPDATED TO 4 ****
+STEPS = 10000 # Number of steps to visualize (adjust as needed)
+GRID_SIZE = globals.grid_size # Get grid size from globals
+
+# --- Model and VecNormalize Paths ---
+# **** UPDATE THESE PATHS to where your trained model and VecNormalize stats are saved ****
+#SAVE_DIR = "LMA_RL_MultiAgent_V1" # Example directory
+MODEL_NAME = "trained_model_multi_lma"
+VEC_ENV_NAME = "Trained_VecNormalize.pkl"
+
+MODEL_PATH = "Trained_Model" # .zip is added automatically by SB3 load/save
+VEC_NORM_PATH = VEC_ENV_NAME
 
 class ShowcaseSimulation:
-    def __init__(self, model_path, vec_env, steps):
-        self.model = PPO.load(model_path, env = vec_env)
-        self.env = vec_env
+    def __init__(self, model_path, vec_normalize_path, steps):
+        self.model_path = model_path
+        self.vec_normalize_path = vec_normalize_path
         self.steps = steps
-        self.cca_positions = []
-        self.foxtrot_positions = []
+        self.cca_positions_history = [] # List to store positions of ALL CCAs at each step
+        self.foxtrot_positions_history = [] # List to store Foxtrot position at each step
+        self.env = self._load_env_and_model() # Load env and model during init
+
+    def _load_env_and_model(self):
+        """Loads the VecNormalize statistics and the PPO model."""
+        # Create the base environment with the same parameters used for training
+        # Make sure globals are set correctly before this!
+        print("Creating base environment for loading...")
+        base_env = PPOEnv(grid_size=GRID_SIZE, num_cca=NUM_CCA)
+        dummy_env = DummyVecEnv([lambda: base_env])
+
+        # Load the normalization stats
+        print(f"Loading VecNormalize stats from: {self.vec_normalize_path}")
+        if not os.path.exists(self.vec_normalize_path):
+             raise FileNotFoundError(f"VecNormalize file not found at {self.vec_normalize_path}")
+        vec_env = VecNormalize.load(self.vec_normalize_path, dummy_env)
+
+        # Set to evaluation mode (IMPORTANT!)
+        vec_env.training = False
+        # Don't update normalization stats during evaluation
+        vec_env.norm_obs = True # Keep normalizing obs based on loaded stats
+        vec_env.norm_reward = False # Usually don't normalize reward for eval interpretation
+
+        print(f"Loading trained model from: {self.model_path}.zip")
+        if not os.path.exists(f"{self.model_path}.zip"):
+             raise FileNotFoundError(f"Model file not found at {self.model_path}.zip")
+        # Pass the loaded vec_env to the model loader
+        self.model = PPO.load(self.model_path, env=vec_env)
+        print("Model and VecNormalize loaded successfully.")
+        return vec_env # Return the loaded and configured vec_env
 
     def run_simulation(self):
-        """Run the simulation and collect positions for visualization."""
+        """Run the simulation using the loaded model and collect data."""
+        print(f"Running simulation for {self.steps} steps...")
+        self.cca_positions_history = []
+        self.foxtrot_positions_history = []
+
+        # obs = self.env.reset() # VecEnv reset usually returns obs directly
+        # In SB3, vec_env.reset() returns the observation(s)
         obs = self.env.reset()
 
-        for _ in range(self.steps):
-            # Get the action from the trained model
-            action, _ = self.model.predict(obs)
+        for step_num in range(self.steps):
+            action, _ = self.model.predict(obs, deterministic=True)
 
-            # Step the environment
-            obs, reward, terminated, truncated = self.env.step(action)
+            # --- UNPACK 4 VALUES ---
+            # Use 'dones' for the combined termination/truncation flag
+            obs, reward, dones, infos = self.env.step(action)
+            # -----------------------
 
-            # Store positions for visualization
-            self.cca_positions.append(
-                np.array([np.array(pos) for pos in self.env.get_attr('cca_positions')[0]], dtype=float)
+            current_cca_objs = self.env.get_attr('cca_objs')[0]
+            current_foxtrot_obj = self.env.get_attr('foxtrot_obj')[0]
+
+            self.cca_positions_history.append(
+                np.array([cca.position.copy() for cca in current_cca_objs], dtype=float)
             )
-            self.foxtrot_positions.append(
-                np.array(self.env.get_attr('foxtrot_position')[0], dtype=float)
+            self.foxtrot_positions_history.append(
+                current_foxtrot_obj.position.copy()
             )
 
-            terminated = truncated = False #This is wrong. It's happening because terminated is being set to done success at end of each training episode
+            # --- Check 'dones' from VecEnv ---
+            # dones is usually an array[bool] for VecEnvs
+            is_done = any(dones)
+            # ----------------------------------
 
-            if truncated:
-                print("Episode Truncated (Non-natural endpoint (hard-stopped))")
-            
-            if terminated:
-                print("Episode Terminated (Natural endpoint (Objective Achieved))")
+            if step_num % 100 == 0 or is_done:
+                 # We don't know if it was terminated or truncated from 'dones' alone,
+                 # but we can check the info dict if Monitor added termination info.
+                 # infos is a list of dicts in VecEnv, access the first one.
+                 info_dict = infos[0] if infos else {}
+                 term_reason = "Unknown"
+                 if info_dict.get("TimeLimit.truncated", False): # Check common truncation key
+                     term_reason = "Truncated (TimeLimit)"
+                 elif info_dict.get("terminated", False): # Check if env explicitly set terminated
+                     term_reason = "Terminated (Goal?)"
+                 elif is_done: # If done is true but no specific key found
+                      term_reason = "Done (Unknown)"
 
-    def visualize(self):
+                 print(f"Step: {step_num}, Reward: {reward[0]:.2f}, Done: {is_done} ({term_reason})")
+
+
+            if is_done:
+                print(f"Episode finished at step {step_num + 1}.")
+                break # Stop visualizing this episode
+        print("Simulation run complete.")
+
+    def visualize(self, save_gif=False, filename="simulation.gif"):
         """Visualize the simulation results."""
-        fig = plt.figure()
+        if not self.cca_positions_history or not self.foxtrot_positions_history:
+            print("No simulation data to visualize. Run run_simulation() first.")
+            return
+
+        print("Preparing visualization...")
+        fig = plt.figure(figsize=(10, 8))
         ax = fig.add_subplot(111, projection='3d')
 
-        # Set up the grid
-        ax.set_xlim([0, globals.grid_size])
-        ax.set_ylim([0, globals.grid_size])
-        ax.set_zlim([0, globals.grid_size])
-        ax.set_xlabel('X-axis')
-        ax.set_ylabel('Y-axis')
-        ax.set_zlabel('Z-axis')
+        # Determine plot bounds dynamically or use fixed grid size
+        max_range = GRID_SIZE
+        ax.set_xlim([0, max_range])
+        ax.set_ylim([0, max_range])
+        ax.set_zlim([0, max_range])
+        ax.set_xlabel('X-axis'); ax.set_ylabel('Y-axis'); ax.set_zlabel('Z-axis')
+
+        # Define colors for CCAs
+        cca_colors = plt.cm.viridis(np.linspace(0, 0.8, NUM_CCA)) # Use a colormap
+
+        # Create plot elements (lines and points) - initialize empty
+        cca_lines = [ax.plot([], [], [], lw=1, color=cca_colors[i], alpha=0.6)[0] for i in range(NUM_CCA)]
+        cca_points = [ax.plot([], [], [], marker='o', markersize=6, color=cca_colors[i], linestyle='None')[0] for i in range(NUM_CCA)]
+        foxtrot_line = ax.plot([], [], [], lw=1.5, color='orange', alpha=0.8)[0]
+        foxtrot_point = ax.plot([], [], [], marker='*', markersize=10, color='red', linestyle='None')[0]
+
+        def init_plot():
+            """Initialize plot elements for animation."""
+            for i in range(NUM_CCA):
+                cca_lines[i].set_data([], [])
+                cca_lines[i].set_3d_properties([])
+                cca_points[i].set_data([], [])
+                cca_points[i].set_3d_properties([])
+            foxtrot_line.set_data([], [])
+            foxtrot_line.set_3d_properties([])
+            foxtrot_point.set_data([], [])
+            foxtrot_point.set_3d_properties([])
+            # Add legends once
+            ax.legend([plt.Line2D([0],[0], color=cca_colors[i], lw=2) for i in range(NUM_CCA)] +
+                      [plt.Line2D([0],[0], color='orange', lw=2)],
+                      [f'CCA {i+1}' for i in range(NUM_CCA)] + ['Foxtrot'],
+                      loc='upper left', bbox_to_anchor=(1.05, 1))
+            return cca_lines + cca_points + [foxtrot_line, foxtrot_point]
 
         def update(frame):
-            ax.cla()
-            ax.set_xlim([0, globals.grid_size])
-            ax.set_ylim([0, globals.grid_size])
-            ax.set_zlim([0, globals.grid_size])
-            ax.set_xlabel('X-axis')
-            ax.set_ylabel('Y-axis')
-            ax.set_zlabel('Z-axis')
+            """Update plot elements for each frame."""
+            # Update Foxtrot
+            foxtrot_path_data = np.array(self.foxtrot_positions_history[:frame+1])
+            if foxtrot_path_data.size > 0:
+                foxtrot_line.set_data(foxtrot_path_data[:, 0], foxtrot_path_data[:, 1])
+                foxtrot_line.set_3d_properties(foxtrot_path_data[:, 2])
+                foxtrot_point.set_data([foxtrot_path_data[-1, 0]], [foxtrot_path_data[-1, 1]])
+                foxtrot_point.set_3d_properties([foxtrot_path_data[-1, 2]])
 
+            # Update CCAs
             for i in range(NUM_CCA):
-                if frame >= len(self.cca_positions) or i >= len(self.cca_positions[0]):
-                    continue
+                 # Extract path for CCA i up to current frame
+                 cca_path_data = np.array([step_positions[i] for step_positions in self.cca_positions_history[:frame+1]])
+                 if cca_path_data.size > 0:
+                     cca_lines[i].set_data(cca_path_data[:, 0], cca_path_data[:, 1])
+                     cca_lines[i].set_3d_properties(cca_path_data[:, 2])
+                     cca_points[i].set_data([cca_path_data[-1, 0]], [cca_path_data[-1, 1]])
+                     cca_points[i].set_3d_properties([cca_path_data[-1, 2]])
 
-                # CCA path up to 'frame'
-                cca_path = np.array([pos[i] for pos in self.cca_positions[:frame]])
-                if len(cca_path) > 0:
-                    ax.plot(cca_path[:, 0], cca_path[:, 1], cca_path[:, 2],
-                            color='green', label=f'CCA {i + 1} Path' if frame == 1 and i == 0 else "")
-                    # Plot current CCA position as a larger scatter
-                    ax.scatter(*cca_path[-1], color='green', s=80)
+            # Update title and view
+            ax.set_title(f'Simulation Step: {frame + 1}/{len(self.cca_positions_history)}')
+            ax.view_init(elev=30, azim=frame * 0.3) # Slower rotation
+            return cca_lines + cca_points + [foxtrot_line, foxtrot_point]
 
-            if frame < len(self.foxtrot_positions):
-                foxtrot_path = np.array(self.foxtrot_positions[:frame])
-                if len(foxtrot_path) > 0:
-                    ax.plot(foxtrot_path[:, 0], foxtrot_path[:, 1], foxtrot_path[:, 2],
-                            color='orange', label='Foxtrot Path' if frame == 1 else "")
-                    # Plot current Foxtrot position as a larger scatter
-                    ax.scatter(*foxtrot_path[-1], color='orange', s=80)
+        # Create animation
+        num_frames = len(self.cca_positions_history) # Animate recorded steps
+        anim = FuncAnimation(fig, update, frames=num_frames, init_func=init_plot,
+                             interval=50, blit=False) # Blit=False often more stable for 3D
 
-            if frame == 1:  # Just so the legend is not repeated every frame
-                ax.legend()
-            
-            # Slow rotation
-            ax.view_init(elev=30, azim=frame * 0.5)
-            
-        anim = FuncAnimation(fig, update, frames=self.steps, interval=50)
-        plt.show()
+        # Save or show
+        if save_gif:
+             print(f"Saving animation to {filename}...")
+             # Ensure you have ffmpeg or imagemagick installed for saving
+             # Or use PillowWriter: pip install Pillow
+             writer = PillowWriter(fps=20) # Adjust fps
+             anim.save(filename, writer=writer)
+             print("Animation saved.")
+        else:
+             plt.tight_layout()
+             plt.show()
 
 
 if __name__ == "__main__":
 
     # ----------------------
-    # TOGGLE FOXTROT MODES HERE
+    # Set Globals for Evaluation
+    # (Should match the *final* stage the model was trained for, if applicable)
     # ----------------------
     globals.BASIC_REWARD = False
-    globals.COMPLEX_REWARD = True
+    globals.COMPLEX_REWARD = True # Reward type doesn't affect simulation, only training
 
-
-    globals.STATIONARY_FOXTROT = False
-    globals.RAND_POS = True
+    # Set Foxtrot movement mode used during the *end* of training
+    globals.STATIONARY_FOXTROT = True # Visualize stationary target
+    globals.RECTANGULAR_FOXTROT = False
+    globals.RAND_POS = True # Start Foxtrot randomly (consistent with training)
     globals.FIXED_POS = False
-    globals.RECTANGULAR_FOXTROT = True
+
+    # Set CCA starting mode used during the *end* of training
+    globals.PROXIMITY_CCA = False # Start CCAs randomly
     globals.RAND_FIXED_CCA = False
-    globals.PROXIMITY_CCA = False
 
-    # Initialize environment with the updated flags
-    base_env = PPOEnv(grid_size=globals.grid_size, num_cca=NUM_CCA)
-    dummy_env = DummyVecEnv([lambda: base_env])
+    # --- Initialize and Run Showcase ---
+    try:
+        showcase = ShowcaseSimulation(
+            model_path=MODEL_PATH,
+            vec_normalize_path=VEC_NORM_PATH,
+            steps=STEPS
+        )
 
-    # Load the normalization stats
-    vec_env = VecNormalize.load("Trained_VecNormalize.pkl", dummy_env)
+        showcase.run_simulation()
+        showcase.visualize(save_gif=True, filename="multi_agent_search_intercept.gif") # Example: save as GIF
 
-    # Important: Set to evaluation mode
-    vec_env.training = False
-    # Typically disable reward normalization at test time
-    vec_env.norm_reward = False
-    # Also typically freeze observation normalization updates:
-    # vec_env.eval() in SB3 2.0, or set vec_env.training=False in older versions
-
-    # Initialize the showcase simulation
-    showcase = ShowcaseSimulation(
-        model_path="Trained_Model",
-        vec_env=vec_env,
-        steps=STEPS
-    )
-
-    # Run the simulation
-    showcase.run_simulation()
-
-    # Visualize the results
-    showcase.visualize()
+    except FileNotFoundError as e:
+        print(f"\nError loading files: {e}")
+        print("Please ensure the model and VecNormalize files exist at the specified paths:")
+        print(f"Model: {MODEL_PATH}.zip")
+        print(f"VecNormalize: {VEC_NORM_PATH}")
+    except Exception as e:
+        print(f"\nAn error occurred during showcase: {e}")
+        import traceback
+        traceback.print_exc()
