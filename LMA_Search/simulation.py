@@ -52,17 +52,20 @@ class PPOEnv(gym.Env):
         self.grid_size = grid_size
         if num_cca != 2: raise ValueError("This environment version requires num_cca=2")
         self.num_cca = num_cca
-        self.observable_radius = 100.0 # Radius within which Foxtrot is visible
+        self.observable_radius = 200.0 # Radius within which Foxtrot is visible
 
         # Simulation state
         self.current_step = 0
-        self.max_steps = 400 # Max steps per episode
+        self.max_steps = 1000 # Max steps per episode
         self.foxtrot_obj = None
         self.cca_objs = []
 
         # Reward Shaping State
         self.previous_potential = None
+        self.previous_cca_positions = None # Reset previous positions for exploration bonus calc
         self.was_observable_prev_step = False # For detecting visibility changes
+        self.previous_avg_distance = None # Store previous avg distance for shaping
+        
 
         # --- Define Action Space (Actions for 2 CCAs) ---
         self.action_space = spaces.Box(
@@ -107,6 +110,8 @@ class PPOEnv(gym.Env):
         self.current_step = 0
         self.previous_potential = None
         self.was_observable_prev_step = False
+        self.previous_avg_distance = None
+        self.previous_cca_positions = None
 
         # --- Reset Foxtrot (Stationary, Random Position) ---
         # Ensure STATIONARY_FOXTROT and RAND_POS are True in globals or config
@@ -127,6 +132,7 @@ class PPOEnv(gym.Env):
             if i > 0 and np.linalg.norm(initial_cca_pos - self.cca_objs[0].position) < self.cca_collision_radius * 2:
                  initial_cca_pos = self.np_random.integers(0, self.grid_size, size=3).astype(float) # Try again
             self.cca_objs.append(CCA(f"CCA_{i}", initial_cca_pos))
+        self.previous_cca_positions = [cca.position.copy() for cca in self.cca_objs]
 
         # --- Reset Histories ---
         hist_len = self.observation_history_len
@@ -166,15 +172,16 @@ class PPOEnv(gym.Env):
         # --- Update Foxtrot State (Stationary in this version) ---
         # No movement needed for foxtrot_obj.position
 
-        # --- Update Foxtrot History (Based on CURRENT observability) ---
+        # --- Determine CURRENT observability & Update Foxtrot History ---
         is_observable_now = any(np.linalg.norm(cca.position - self.foxtrot_obj.position) < self.observable_radius for cca in self.cca_objs)
         current_foxtrot_obs = self.foxtrot_obj.position if is_observable_now else PLACEHOLDER_POS
         self.foxtrot_history = np.roll(self.foxtrot_history, shift=-1, axis=0)
         self.foxtrot_history[-1] = current_foxtrot_obs
 
         # --- Calculate Reward ---
+        # Pass current observability status AND use stored previous status
         reward = self._calculate_reward(actions=clipped_actions, is_observable_now=is_observable_now)
-
+        
         # --- Check Termination Conditions ---
         terminated = False # Goal reached (capture)
         truncated = False # Time limit
@@ -214,81 +221,111 @@ class PPOEnv(gym.Env):
         return obs_flat
 
     def _calculate_reward(self, actions=None, is_observable_now=False):
-        """New reward function for search and intercept with partial observability."""
+        """
+        Reward function for 2 CCAs searching (exploration) and intercepting (exploitation)
+        with partial observability. Switches incentives based on visibility.
+        """
+        # --- Parameters (Tune these!) ---
+        # Exploitation (Foxtrot Visible)
+        exploit_progress_scale = 50.0   # Scale for distance reduction reward when Foxtrot is VISIBLE
+        capture_bonus = 2500.0           # Bonus for successful capture
 
-        # --- Parameters ---
-        potential_weight = 0.95       # Discount factor for potential shaping (gamma in PPO context)
-        capture_bonus = 2000.0       # Large reward for getting within capture radius
-        find_bonus = 500.0           # Bonus for transitioning from not observable to observable
-        time_penalty = -1.0          # Penalty per step to encourage speed
-        cca_collision_penalty = -100.0# Penalty if CCAs collide
-        energy_penalty_coeff = 0.05  # Penalty for large actions
+        # Exploration (Foxtrot Hidden)
+        explore_separation_penalty = -0.5 # Penalty multiplier for squared distance between CCAs (encourage separation)
+        explore_movement_bonus = 0.1    # Small reward multiplier for average distance moved by CCAs
+
+        # Shared Penalties/Bonuses
+        find_bonus = 500.0               # One-time bonus for finding Foxtrot
+        time_penalty = -1.0              # Penalty per step
+        cca_collision_penalty = -10.0    # Smaller penalty for getting too close (vs crossing radius)
+        energy_penalty_coeff = 0.01
 
         reward = 0.0
 
-        # --- Components ---
-        current_cca_positions = [cca.position for cca in self.cca_objs]
-        current_foxtrot_position = self.foxtrot_obj.position # Use true position for reward shaping
+        # --- Calculate Current State ---
+        current_cca_positions = [cca.position.copy() for cca in self.cca_objs] # Copy current positions
+        current_foxtrot_position = self.foxtrot_obj.position
 
-        if not current_cca_positions: return 0.0 # Handle no CCAs
+        if not current_cca_positions or len(current_cca_positions) != self.num_cca: return 0.0 # Safety check
 
-        # Calculate current potential
-        avg_dist = np.mean([np.linalg.norm(pos - current_foxtrot_position) for pos in current_cca_positions])
-        current_potential = -avg_dist # Potential is negative average distance
-
-        potential_reward_shaped = 0.0 # Default to 0
-        previous_potential = getattr(self, 'previous_potential', None) # Get previous, default None
-
-        if previous_potential is not None: # Only calculate if previous exists
-             # Standard potential shaping: gamma * current_potential - previous_potential is WRONG.
-             # Correct is: gamma * potential(s_prime) - potential(s)
-             potential_reward_shaped = potential_weight * current_potential - previous_potential
-             # Alternative standard form: gamma * V(s') - V(s). If potential IS value V(s)=-dist
-             # then reward = r + gamma*V(s') - V(s) = r + potential_reward_shaped
-             # Some literature uses: r + gamma * potential(s')
-             # Let's use the common difference form: gamma * current - previous
-             # potential_reward_shaped = potential_weight * (current_potential - previous_potential) # Encourage INCREASE in potential
-
-        reward += potential_reward_shaped
-        # Store current potential for next step, regardless of whether previous existed
-        self.previous_potential = current_potential
-
-        # 2. Capture Bonus
-        min_dist = min(np.linalg.norm(pos - current_foxtrot_position) for pos in current_cca_positions)
-        if min_dist < self.capture_radius:
-            reward += capture_bonus
-
-        # 3. Find Bonus (if just became observable)
-        if is_observable_now and not self.was_observable_prev_step:
-            reward += find_bonus
-
-        # 4. Time Penalty
+        # --- Shared Penalty Calculations ---
+        # 1. Time Penalty
         reward += time_penalty
 
-        # 5. CCA-CCA Collision Penalty
+        # 2. Energy Penalty
+        if actions is not None:
+            action_magnitude_sq = np.sum(actions**2)
+            reward -= energy_penalty_coeff * action_magnitude_sq
+
+        # 3. CCA-CCA Collision Penalty
         if self.num_cca > 1:
              dist_cca = np.linalg.norm(current_cca_positions[0] - current_cca_positions[1])
              if dist_cca < self.cca_collision_radius:
                  reward += cca_collision_penalty
+                 # Maybe make penalty harsher if they are *really* close
+                 # reward -= 5.0 / (dist_cca + 1e-6) # Example inverse distance penalty
 
-        # 6. Energy Penalty (based on action magnitude)
-        if actions is not None:
-            action_magnitude_sq = np.sum(actions**2) # Sum of squares
-            reward -= energy_penalty_coeff * action_magnitude_sq
+        # --- Visibility-Dependent Rewards ---
+        current_avg_distance_to_foxtrot = np.mean([np.linalg.norm(pos - current_foxtrot_position) for pos in current_cca_positions])
 
+        if is_observable_now:
+            # --- Exploitation Phase ---
+            mode = "Exploit"
+            # 4a. Progress Reward (Potential Shaping for "Darting")
+            progress_reward = 0.0
+            if self.previous_avg_distance is not None:
+                distance_reduction = self.previous_avg_distance - current_avg_distance_to_foxtrot
+                progress_reward = exploit_progress_scale * distance_reduction
+            reward += progress_reward
+
+            # 5a. Find Bonus (if just became visible)
+            if not self.was_observable_prev_step:
+                reward += find_bonus
+
+            # 6a. Capture Bonus Check (Termination handled in step)
+            min_dist_to_foxtrot = np.linalg.norm(current_cca_positions[0] - current_foxtrot_position) if self.num_cca==1 else min(np.linalg.norm(pos - current_foxtrot_position) for pos in current_cca_positions)
+            if min_dist_to_foxtrot < self.capture_radius:
+                reward += capture_bonus
+
+        else:
+            # --- Exploration Phase ---
+            mode = "Explore"
+            # 4b. Separation Reward (Penalize proximity between CCAs)
+            if self.num_cca > 1:
+                 # Use squared distance? Or inverse? Let's try penalizing proximity more strongly.
+                 # Inverse distance penalty: gets very large when close
+                 # reward -= 1.0 / (dist_cca + 1e-6) # Very sensitive
+                 # Linear penalty based on closeness:
+                 proximity_penalty = max(0, (self.cca_collision_radius * 5) - dist_cca) # Penalize if within 5x collision radius
+                 reward -= explore_separation_penalty * proximity_penalty # Positive penalty value
+
+            # 5b. Movement/Coverage Bonus (Reward moving away from previous spots)
+            movement_reward = 0.0
+            if self.previous_cca_positions is not None:
+                avg_dist_moved = np.mean([np.linalg.norm(current_cca_positions[i] - self.previous_cca_positions[i]) for i in range(self.num_cca)])
+                movement_reward = explore_movement_bonus * avg_dist_moved
+            reward += movement_reward
+
+        # --- Update State for Next Step ---
+        self.previous_avg_distance = current_avg_distance_to_foxtrot
+        self.previous_cca_positions = current_cca_positions # Store list of current positions
+
+        # --- Debug Printing ---
         if REWARD_DEBUG:
             dist_str = ", ".join([f"{np.linalg.norm(p - current_foxtrot_position):.1f}" for p in current_cca_positions])
-            obs_status = "Visible" if is_observable_now else "Hidden"
-            find_bonus_applied = find_bonus if (is_observable_now and not self.was_observable_prev_step) else 0
-            capture_bonus_applied = capture_bonus if min_dist < self.capture_radius else 0
-            cca_coll_applied = cca_collision_penalty if (self.num_cca > 1 and dist_cca < self.cca_collision_radius) else 0
-            energy_applied = -energy_penalty_coeff * action_magnitude_sq if actions is not None else 0
-            pot_rew_str = f"{potential_reward_shaped:.3f}" if previous_potential is not None else "N/A (1st step)"
+            cca_dist_str = f"{dist_cca:.1f}" if self.num_cca > 1 else "N/A"
+            find_b = find_bonus if is_observable_now and not self.was_observable_prev_step else 0
+            capt_b = capture_bonus if is_observable_now and min_dist_to_foxtrot < self.capture_radius else 0
+            cca_coll_p = cca_collision_penalty if self.num_cca > 1 and dist_cca < self.cca_collision_radius else 0
+            energy_p = -energy_penalty_coeff * action_magnitude_sq if actions is not None else 0
+            prog_rew = progress_reward if is_observable_now and self.previous_avg_distance is not None else 0
+            sep_p = -explore_separation_penalty * proximity_penalty if not is_observable_now and self.num_cca > 1 else 0
+            move_b = movement_reward if not is_observable_now and self.previous_cca_positions is not None else 0
 
-            print(f"Step {self.current_step}: Reward={reward:.3f} | Dists=[{dist_str}] | Fox={obs_status} | "
-                  f"PotRew={pot_rew_str} | FindB={find_bonus_applied:.0f} | CaptB={capture_bonus_applied:.0f} | "
-                  f"CCACollP={cca_coll_applied:.0f} | EnergyP={energy_applied:.3f}")
 
+            print(f"Step {self.current_step}: Total={reward:.2f} | Mode={mode} | Dists=[{dist_str}] | CCA_Dist={cca_dist_str} | "
+                  f"Prog={prog_rew:.2f} | SepP={sep_p:.2f} | MoveB={move_b:.2f} | FindB={find_b:.0f} | CaptB={capt_b:.0f} | "
+                  f"CCACollP={cca_coll_p:.0f} | EnergyP={energy_p:.2f} | TimeP={time_penalty:.0f}")
 
         return float(reward)
     
@@ -302,7 +339,7 @@ class PlottingCallback(BaseCallback):
          super().__init__(verbose)
          self.plot_freq = plot_freq; self.log_dir = log_dir; self.save_path = os.path.join(log_dir, "monitor.csv")
          self.fig = None; self.ax = None; self.steps = []; self.rewards = []
-     def _on_training_start(self) -> None: pass # Implement full plotting if needed
+     def _on_training_start(self) -> None: pass # Implement full plotting if needed§
      def _on_step(self) -> bool: return True
      def _on_training_end(self) -> None: pass
 
@@ -387,7 +424,7 @@ if __name__ == "__main__":
         learning_rate=linear_schedule(initial_value= 0.0003), # Possibly lower LR for harder task
         n_steps=2000,             # Increase steps for more data per update
         batch_size=600,           # Increase batch size
-        n_epochs=10,
+        n_epochs=3,
         gamma=0.85,               # Standard discount factor
         gae_lambda=0.8,           # Standard GAE factor
         clip_range=0.2,           # Standard PPO clip range
