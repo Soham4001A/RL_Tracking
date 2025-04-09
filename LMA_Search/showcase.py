@@ -115,25 +115,25 @@ class ShowcaseSimulation:
                 break # Stop visualizing this episode
         print("Simulation run complete.")
 
-    def visualize(self, save_gif=False, filename="simulation.gif"):
-        """Visualize the simulation results."""
+    def visualize(self): # Simplified signature
+        """Visualize the simulation results using matplotlib animation."""
         if not self.cca_positions_history or not self.foxtrot_positions_history:
             print("No simulation data to visualize. Run run_simulation() first.")
             return
 
         print("Preparing visualization...")
+        # Use non-interactive backend temporarily if issues arise, but usually default works
+        # import matplotlib
+        # matplotlib.use('TkAgg') # Or 'Qt5Agg' etc. if default backend causes issues
         fig = plt.figure(figsize=(10, 8))
         ax = fig.add_subplot(111, projection='3d')
 
         # Determine plot bounds dynamically or use fixed grid size
         max_range = GRID_SIZE
-        ax.set_xlim([0, max_range])
-        ax.set_ylim([0, max_range])
-        ax.set_zlim([0, max_range])
+        ax.set_xlim([0, max_range]); ax.set_ylim([0, max_range]); ax.set_zlim([0, max_range])
         ax.set_xlabel('X-axis'); ax.set_ylabel('Y-axis'); ax.set_zlabel('Z-axis')
 
-        # Define colors for CCAs
-        cca_colors = plt.cm.viridis(np.linspace(0, 0.8, NUM_CCA)) # Use a colormap
+        cca_colors = plt.cm.viridis(np.linspace(0, 0.8, NUM_CCA))
 
         # Create plot elements (lines and points) - initialize empty
         cca_lines = [ax.plot([], [], [], lw=1, color=cca_colors[i], alpha=0.6)[0] for i in range(NUM_CCA)]
@@ -141,22 +141,19 @@ class ShowcaseSimulation:
         foxtrot_line = ax.plot([], [], [], lw=1.5, color='orange', alpha=0.8)[0]
         foxtrot_point = ax.plot([], [], [], marker='*', markersize=10, color='red', linestyle='None')[0]
 
+        # Store legend handles
+        legend_handles = [plt.Line2D([0],[0], color=cca_colors[i], lw=2, label=f'CCA {i+1}') for i in range(NUM_CCA)]
+        legend_handles.append(plt.Line2D([0],[0], color='orange', lw=2, label='Foxtrot'))
+
         def init_plot():
             """Initialize plot elements for animation."""
             for i in range(NUM_CCA):
-                cca_lines[i].set_data([], [])
-                cca_lines[i].set_3d_properties([])
-                cca_points[i].set_data([], [])
-                cca_points[i].set_3d_properties([])
-            foxtrot_line.set_data([], [])
-            foxtrot_line.set_3d_properties([])
-            foxtrot_point.set_data([], [])
-            foxtrot_point.set_3d_properties([])
-            # Add legends once
-            ax.legend([plt.Line2D([0],[0], color=cca_colors[i], lw=2) for i in range(NUM_CCA)] +
-                      [plt.Line2D([0],[0], color='orange', lw=2)],
-                      [f'CCA {i+1}' for i in range(NUM_CCA)] + ['Foxtrot'],
-                      loc='upper left', bbox_to_anchor=(1.05, 1))
+                cca_lines[i].set_data([], []); cca_lines[i].set_3d_properties([])
+                cca_points[i].set_data([], []); cca_points[i].set_3d_properties([])
+            foxtrot_line.set_data([], []); foxtrot_line.set_3d_properties([])
+            foxtrot_point.set_data([], []); foxtrot_point.set_3d_properties([])
+            # Add legend using handles created outside
+            ax.legend(handles=legend_handles, loc='upper left', bbox_to_anchor=(1.05, 1))
             return cca_lines + cca_points + [foxtrot_line, foxtrot_point]
 
         def update(frame):
@@ -171,7 +168,6 @@ class ShowcaseSimulation:
 
             # Update CCAs
             for i in range(NUM_CCA):
-                 # Extract path for CCA i up to current frame
                  cca_path_data = np.array([step_positions[i] for step_positions in self.cca_positions_history[:frame+1]])
                  if cca_path_data.size > 0:
                      cca_lines[i].set_data(cca_path_data[:, 0], cca_path_data[:, 1])
@@ -179,27 +175,23 @@ class ShowcaseSimulation:
                      cca_points[i].set_data([cca_path_data[-1, 0]], [cca_path_data[-1, 1]])
                      cca_points[i].set_3d_properties([cca_path_data[-1, 2]])
 
-            # Update title and view
             ax.set_title(f'Simulation Step: {frame + 1}/{len(self.cca_positions_history)}')
-            ax.view_init(elev=30, azim=frame * 0.3) # Slower rotation
+            ax.view_init(elev=30, azim=frame * 0.3) # Adjust rotation speed if needed
+            # No need to return legend handles every time
             return cca_lines + cca_points + [foxtrot_line, foxtrot_point]
 
         # Create animation
-        num_frames = len(self.cca_positions_history) # Animate recorded steps
+        num_frames = len(self.cca_positions_history)
+        print(f"Creating animation with {num_frames} frames...")
+        # Use blit=False for 3D plots, it's generally more reliable
         anim = FuncAnimation(fig, update, frames=num_frames, init_func=init_plot,
-                             interval=50, blit=False) # Blit=False often more stable for 3D
+                             interval=50, blit=False, repeat=False)
 
-        # Save or show
-        if save_gif:
-             print(f"Saving animation to {filename}...")
-             # Ensure you have ffmpeg or imagemagick installed for saving
-             # Or use PillowWriter: pip install Pillow
-             writer = PillowWriter(fps=20) # Adjust fps
-             anim.save(filename, writer=writer)
-             print("Animation saved.")
-        else:
-             plt.tight_layout()
-             plt.show()
+        # --- CHANGE: Show the plot instead of saving ---
+        print("Displaying simulation animation...")
+        plt.tight_layout() # Adjust layout before showing
+        plt.show()
+        print("Animation window closed.")
 
 
 if __name__ == "__main__":
@@ -230,7 +222,8 @@ if __name__ == "__main__":
         )
 
         showcase.run_simulation()
-        showcase.visualize(save_gif=True, filename="multi_agent_search_intercept.gif") # Example: save as GIF
+        showcase.visualize()
+        #showcase.visualize(save_gif=True, filename="multi_agent_search_intercept.gif") # Example: save as GIF
 
     except FileNotFoundError as e:
         print(f"\nError loading files: {e}")
