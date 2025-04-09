@@ -50,13 +50,13 @@ class PPOEnv(gym.Env):
     def __init__(self, grid_size=500, num_cca=2): # Default num_cca=2
         super().__init__()
         self.grid_size = grid_size
-        if num_cca != 2: raise ValueError("This environment version requires num_cca=2")
+        #if num_cca != 2: raise ValueError("This environment version requires num_cca=2")
         self.num_cca = num_cca
         self.observable_radius = 200.0 # Radius within which Foxtrot is visible
 
         # Simulation state
         self.current_step = 0
-        self.max_steps = 1000 # Max steps per episode
+        self.max_steps = 2000 # Max steps per episode
         self.foxtrot_obj = None
         self.cca_objs = []
 
@@ -222,110 +222,71 @@ class PPOEnv(gym.Env):
 
     def _calculate_reward(self, actions=None, is_observable_now=False):
         """
-        Reward function for 2 CCAs searching (exploration) and intercepting (exploitation)
-        with partial observability. Switches incentives based on visibility.
+        Simplified reward: Distance penalty + Spread bonus (if hidden).
         """
         # --- Parameters (Tune these!) ---
-        # Exploitation (Foxtrot Visible)
-        exploit_progress_scale = 50.0   # Scale for distance reduction reward when Foxtrot is VISIBLE
-        capture_bonus = 2500.0           # Bonus for successful capture
+        distance_penalty_coeff = 0.8  # Penalty multiplier for avg distance to target (Positive value)
+        spread_bonus_coeff = 0.4     # Bonus multiplier for distance between CCAs (Positive value)
 
-        # Exploration (Foxtrot Hidden)
-        explore_separation_penalty = -0.5 # Penalty multiplier for squared distance between CCAs (encourage separation)
-        explore_movement_bonus = 0.1    # Small reward multiplier for average distance moved by CCAs
-
-        # Shared Penalties/Bonuses
-        find_bonus = 500.0               # One-time bonus for finding Foxtrot
-        time_penalty = -1.0              # Penalty per step
-        cca_collision_penalty = -10.0    # Smaller penalty for getting too close (vs crossing radius)
-        energy_penalty_coeff = 0.01
+        capture_bonus = 1000.0        # Bonus for successful capture
+        time_penalty = -0.5           # Smaller time penalty?
+        cca_collision_penalty = -5.0  # Penalty if CCAs get too close
+        energy_penalty_coeff = 0.005  # Smaller energy penalty?
 
         reward = 0.0
 
         # --- Calculate Current State ---
-        current_cca_positions = [cca.position.copy() for cca in self.cca_objs] # Copy current positions
+        current_cca_positions = [cca.position for cca in self.cca_objs]
         current_foxtrot_position = self.foxtrot_obj.position
+        if not current_cca_positions or len(current_cca_positions) != self.num_cca: return 0.0
 
-        if not current_cca_positions or len(current_cca_positions) != self.num_cca: return 0.0 # Safety check
+        # --- Calculate Distances ---
+        avg_dist_to_foxtrot = np.mean([np.linalg.norm(pos - current_foxtrot_position) for pos in current_cca_positions])
+        min_dist_to_foxtrot = min(np.linalg.norm(pos - current_foxtrot_position) for pos in current_cca_positions)
+        dist_cca = 0.0
+        if self.num_cca > 1:
+            dist_cca = np.linalg.norm(current_cca_positions[0] - current_cca_positions[1])
 
-        # --- Shared Penalty Calculations ---
-        # 1. Time Penalty
+        # --- Apply Rewards/Penalties ---
+
+        # 1. Raw Distance Penalty (Always active)
+        reward -= distance_penalty_coeff * avg_dist_to_foxtrot
+
+        # 2. Spread Bonus (ONLY if Foxtrot is HIDDEN)
+        if not is_observable_now and self.num_cca > 1:
+            # Reward based on distance between CCAs
+            reward += spread_bonus_coeff * dist_cca
+
+        # 3. Time Penalty (Always active)
         reward += time_penalty
 
-        # 2. Energy Penalty
+        # 4. Energy Penalty (Always active)
         if actions is not None:
             action_magnitude_sq = np.sum(actions**2)
             reward -= energy_penalty_coeff * action_magnitude_sq
 
-        # 3. CCA-CCA Collision Penalty
-        if self.num_cca > 1:
-             dist_cca = np.linalg.norm(current_cca_positions[0] - current_cca_positions[1])
-             if dist_cca < self.cca_collision_radius:
-                 reward += cca_collision_penalty
-                 # Maybe make penalty harsher if they are *really* close
-                 # reward -= 5.0 / (dist_cca + 1e-6) # Example inverse distance penalty
+        # 5. CCA-CCA Collision Penalty (Always active)
+        if self.num_cca > 1 and dist_cca < self.cca_collision_radius:
+            reward += cca_collision_penalty
 
-        # --- Visibility-Dependent Rewards ---
-        current_avg_distance_to_foxtrot = np.mean([np.linalg.norm(pos - current_foxtrot_position) for pos in current_cca_positions])
-
-        if is_observable_now:
-            # --- Exploitation Phase ---
-            mode = "Exploit"
-            # 4a. Progress Reward (Potential Shaping for "Darting")
-            progress_reward = 0.0
-            if self.previous_avg_distance is not None:
-                distance_reduction = self.previous_avg_distance - current_avg_distance_to_foxtrot
-                progress_reward = exploit_progress_scale * distance_reduction
-            reward += progress_reward
-
-            # 5a. Find Bonus (if just became visible)
-            if not self.was_observable_prev_step:
-                reward += find_bonus
-
-            # 6a. Capture Bonus Check (Termination handled in step)
-            min_dist_to_foxtrot = np.linalg.norm(current_cca_positions[0] - current_foxtrot_position) if self.num_cca==1 else min(np.linalg.norm(pos - current_foxtrot_position) for pos in current_cca_positions)
-            if min_dist_to_foxtrot < self.capture_radius:
-                reward += capture_bonus
-
-        else:
-            # --- Exploration Phase ---
-            mode = "Explore"
-            # 4b. Separation Reward (Penalize proximity between CCAs)
-            if self.num_cca > 1:
-                 # Use squared distance? Or inverse? Let's try penalizing proximity more strongly.
-                 # Inverse distance penalty: gets very large when close
-                 # reward -= 1.0 / (dist_cca + 1e-6) # Very sensitive
-                 # Linear penalty based on closeness:
-                 proximity_penalty = max(0, (self.cca_collision_radius * 5) - dist_cca) # Penalize if within 5x collision radius
-                 reward -= explore_separation_penalty * proximity_penalty # Positive penalty value
-
-            # 5b. Movement/Coverage Bonus (Reward moving away from previous spots)
-            movement_reward = 0.0
-            if self.previous_cca_positions is not None:
-                avg_dist_moved = np.mean([np.linalg.norm(current_cca_positions[i] - self.previous_cca_positions[i]) for i in range(self.num_cca)])
-                movement_reward = explore_movement_bonus * avg_dist_moved
-            reward += movement_reward
-
-        # --- Update State for Next Step ---
-        self.previous_avg_distance = current_avg_distance_to_foxtrot
-        self.previous_cca_positions = current_cca_positions # Store list of current positions
+        # 6. Capture Bonus (Terminal reward)
+        if min_dist_to_foxtrot < self.capture_radius:
+            reward += capture_bonus
 
         # --- Debug Printing ---
         if REWARD_DEBUG:
             dist_str = ", ".join([f"{np.linalg.norm(p - current_foxtrot_position):.1f}" for p in current_cca_positions])
             cca_dist_str = f"{dist_cca:.1f}" if self.num_cca > 1 else "N/A"
-            find_b = find_bonus if is_observable_now and not self.was_observable_prev_step else 0
-            capt_b = capture_bonus if is_observable_now and min_dist_to_foxtrot < self.capture_radius else 0
+            obs_status = "Visible" if is_observable_now else "Hidden "
+            capt_b = capture_bonus if min_dist_to_foxtrot < self.capture_radius else 0
             cca_coll_p = cca_collision_penalty if self.num_cca > 1 and dist_cca < self.cca_collision_radius else 0
             energy_p = -energy_penalty_coeff * action_magnitude_sq if actions is not None else 0
-            prog_rew = progress_reward if is_observable_now and self.previous_avg_distance is not None else 0
-            sep_p = -explore_separation_penalty * proximity_penalty if not is_observable_now and self.num_cca > 1 else 0
-            move_b = movement_reward if not is_observable_now and self.previous_cca_positions is not None else 0
+            dist_p = -distance_penalty_coeff * avg_dist_to_foxtrot
+            spread_b = spread_bonus_coeff * dist_cca if not is_observable_now and self.num_cca > 1 else 0
 
-
-            print(f"Step {self.current_step}: Total={reward:.2f} | Mode={mode} | Dists=[{dist_str}] | CCA_Dist={cca_dist_str} | "
-                  f"Prog={prog_rew:.2f} | SepP={sep_p:.2f} | MoveB={move_b:.2f} | FindB={find_b:.0f} | CaptB={capt_b:.0f} | "
-                  f"CCACollP={cca_coll_p:.0f} | EnergyP={energy_p:.2f} | TimeP={time_penalty:.0f}")
+            print(f"Step {self.current_step}: Total={reward:.2f} | Fox={obs_status} | Dists=[{dist_str}] | CCA_Dist={cca_dist_str} | "
+                  f"DistP={dist_p:.2f} | SpreadB={spread_b:.2f} | CaptB={capt_b:.0f} | "
+                  f"CCACollP={cca_coll_p:.0f} | EnergyP={energy_p:.2f} | TimeP={time_penalty:.1f}")
 
         return float(reward)
     
@@ -372,7 +333,7 @@ if __name__ == "__main__":
     #os.makedirs(log_dir, exist_ok=True)
 
     # Instantiate environment with 2 CCAs
-    env = PPOEnv(grid_size=500, num_cca=2)
+    env = PPOEnv(grid_size=500, num_cca=4)
     #env = Monitor(env, log_dir) # Wrap with Monitor BEFORE DummyVecEnv
 
     vec_env = DummyVecEnv([lambda: env])
@@ -423,7 +384,7 @@ if __name__ == "__main__":
         normalize_advantage=True,
         learning_rate=linear_schedule(initial_value= 0.0003), # Possibly lower LR for harder task
         n_steps=2000,             # Increase steps for more data per update
-        batch_size=600,           # Increase batch size
+        batch_size=1000,           # Increase batch size
         n_epochs=3,
         gamma=0.85,               # Standard discount factor
         gae_lambda=0.8,           # Standard GAE factor
@@ -455,7 +416,7 @@ if __name__ == "__main__":
     # --- Training ---
     print("\nStarting Training (Multi-Agent, Partial Observability)...")
     # No curriculum for now, just train on the main task
-    total_train_steps = 200_000 # Define total steps for this phase
+    total_train_steps = 600_000 # Define total steps for this phase
 
     # Instantiate callbacks (optional plotting or others)
     # plot_callback = PlottingCallback(plot_freq=2048, log_dir=log_dir) # Example
@@ -478,27 +439,26 @@ if __name__ == "__main__":
     vec_env_path = os.path.join(save_dir, "trained_vecnormalize_multi_lma.pkl")
 
     # --- Workaround for TensorFlow/TensorBoard Pickle Error ---
-    print("Temporarily disabling logger before saving...")
-    original_logger = getattr(model, 'logger', None) # Safely get logger
-    if original_logger: model.logger = None
+    #print("Temporarily disabling logger before saving...")
+    #original_logger = getattr(model, 'logger', None) # Safely get logger
+    #if original_logger: model.logger = None
     # --------------------------------------------------------
 
     try:
-        print(f"Saving model to {model_path}.zip...")
-        model.save(model_path)
-        print(f"Saving VecNormalize state to {vec_env_path}...")
-        vec_env.save(vec_env_path) # Save VecNormalize stats
-        print("\nModel and VecNormalize state saved successfully!")
+        # --- Save Model and Environment Wrapper ---
+        model.save("Trained_Model")
+        vec_env.save("Trained_VecNormalize.pkl")
+        print("Model Saved Succesfully!")
 
     except Exception as e:
         print(f"\nError during saving: {e}")
         import traceback
         traceback.print_exc()
-    finally:
+    #finally:
         # --- Restore logger ---
-        if original_logger:
-            print("Restoring logger reference...")
-            model.logger = original_logger
+    #    if original_logger:
+    #        print("Restoring logger reference...")
+    #        model.logger = original_logger
 
     # --- Cleanup ---
     vec_env.close()
