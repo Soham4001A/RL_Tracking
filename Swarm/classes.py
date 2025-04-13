@@ -79,9 +79,137 @@ class CCA(BaseObject):
         super().__init__(name, initial_position, color='green')
 
 class Foxtrot(BaseObject):
-    def __init__(self, name, initial_position):
+    """
+    Foxtrot object that can move autonomously in a cube pattern.
+    Manages its own movement state internally.
+    """
+    def __init__(self, name, initial_position, speed=None, grid_size_param=None):
+        """
+        Initializes the Foxtrot object.
+
+        Args:
+            name (str): Name of the object.
+            initial_position (list or np.ndarray): Starting position [x, y, z].
+            speed (float, optional): Movement speed per step. Defaults to globals.step_size or 10.
+            grid_size_param (int, optional): Size of the grid boundary. Defaults to globals.grid_size or 500.
+        """
         super().__init__(name, initial_position, color='orange')
-        self.cube_state = {} # Only used if RECTANGULAR_FOXTROT is True
+
+        # Use provided params or get from globals/defaults
+        self.grid_size = grid_size_param if grid_size_param is not None else getattr(globals, 'grid_size', 500)
+        default_step = getattr(globals, 'step_size', 10)
+        self.speed = float(speed if speed is not None else default_step)
+
+        # Internal state for cube movement pattern
+        self._initialize_movement_state()
+        # Optional: Add a print statement for debugging initialization
+        # if POSITIONAL_DEBUG: print(f"Foxtrot '{self.name}' initialized. Speed: {self.speed}. Grid: {self.grid_size}")
+
+    def _initialize_movement_state(self):
+        """Resets the internal state dictionary for the cube movement pattern."""
+        self.cube_state = {"phase": "rectangle_init", "rectangle_info": {}, "z_info": {}}
+        # Optional: Debug print for state reset
+        # if POSITIONAL_DEBUG: print(f"  Movement state reset for {self.name}. Phase: {self.cube_state['phase']}")
+
+    def set_position(self, new_position):
+        """
+        Sets a new position for the Foxtrot and resets the cube movement state.
+        Overrides BaseObject.set_position to add state reset.
+        """
+        super().set_position(new_position) # Call parent method to update position and path
+        self._initialize_movement_state() # Reset the movement phase/state
+
+    def move_cube(self, grid_size=None, step_size=None):
+        """
+        Moves the Foxtrot one step according to the cube (rectangle + Z) pattern.
+        Uses internal state (self.cube_state) and speed (self.speed).
+        Updates self.position and appends to self.path.
+
+        Args:
+            grid_size (int, optional): Overrides the instance's grid_size for this step's
+                                       clipping/randomization. Defaults to self.grid_size.
+            step_size (float, optional): Overrides the instance's speed for this step.
+                                         Defaults to self.speed.
+        """
+        # Use provided args or instance defaults
+        current_grid_size = grid_size if grid_size is not None else self.grid_size
+        # NOTE: Renamed internal variable to avoid confusion with the parameter name
+        movement_speed = step_size if step_size is not None else self.speed
+
+        # Ensure state is initialized (safety check)
+        if not hasattr(self, 'cube_state') or not self.cube_state:
+             print(f"Warning: cube_state missing for {self.name}. Re-initializing.")
+             self._initialize_movement_state()
+
+        # --- Cube Movement Logic ---
+        pos_float = self.position.astype(float) # Work with a float copy
+        cube_state = self.cube_state
+        phase = cube_state.get("phase", "rectangle_init")
+
+        # --- Rectangle Phase ---
+        if phase.startswith("rectangle"):
+            rect_info = cube_state.setdefault("rectangle_info", {})
+
+            if phase == "rectangle_init":
+                center_xy = pos_float[:2]
+                # Use instance grid size for random range if not overridden? Or always current? Let's use current.
+                length = np.random.uniform(50, min(200, current_grid_size*0.4)) # Limit size relative to grid
+                width = np.random.uniform(50, min(200, current_grid_size*0.4))
+                half_l, half_w = length / 2.0, width / 2.0
+                v0=center_xy+np.array([+half_l,+half_w]); v1=center_xy+np.array([-half_l,+half_w])
+                v2=center_xy+np.array([-half_l,-half_w]); v3=center_xy+np.array([+half_l,-half_w])
+                rect_info["vertices"]=[v0,v1,v2,v3]; rect_info["current_target_idx"]=0
+                rect_info["laps_completed"]=0; cube_state["phase"]="rectangle_move"
+                if POSITIONAL_DEBUG: print(f"  {self.name}: Init Rect @ {center_xy.round(1)}. Phase -> {cube_state['phase']}")
+                # No actual position change in init step
+
+            elif phase == "rectangle_move":
+                target_idx = rect_info.get("current_target_idx", 0); vertices = rect_info.get("vertices")
+                if not vertices: # Safety check
+                    cube_state["phase"] = "rectangle_init"; print(f"Warning: Rect vertices missing for {self.name}, resetting phase.")
+                else:
+                    target_xy=vertices[target_idx]; current_xy=pos_float[:2]
+                    direction_xy=target_xy-current_xy; dist_xy=np.linalg.norm(direction_xy)
+                    if dist_xy < movement_speed: # Reached target vertex
+                        pos_float[:2]=target_xy # Snap to vertex
+                        next_target_idx=(target_idx+1)%len(vertices); rect_info["current_target_idx"]=next_target_idx
+                        if next_target_idx == 0: # Completed a lap
+                            laps = rect_info.get("laps_completed", 0) + 1; rect_info["laps_completed"] = laps
+                            if POSITIONAL_DEBUG: print(f"  {self.name}: Lap {laps} complete.")
+                            if laps >= 1: # Move to Z phase after 1 lap
+                                cube_state["phase"] = "z_move_init";
+                                if POSITIONAL_DEBUG: print(f"  {self.name}: Rect done. Phase -> {cube_state['phase']}")
+                    else: # Move towards target vertex
+                        step_vector_xy=(direction_xy/dist_xy)*movement_speed; pos_float[:2]+=step_vector_xy
+
+        # --- Z Phase ---
+        elif phase.startswith("z_move"):
+            z_info = cube_state.setdefault("z_info", {})
+
+            if phase == "z_move_init":
+                # Randomize target Z using the potentially overridden grid size
+                z_info["target_z"]=np.random.uniform(0, current_grid_size); cube_state["phase"]="z_move"
+                if POSITIONAL_DEBUG: print(f"  {self.name}: Init Z. Target: {z_info['target_z']:.1f}. Phase -> {cube_state['phase']}")
+                # No actual position change in init step
+
+            elif phase == "z_move":
+                target_z = z_info.get("target_z")
+                if target_z is None: # Safety check
+                    cube_state["phase"] = "z_move_init"; print(f"Warning: Target Z missing for {self.name}, resetting phase.")
+                else:
+                    current_z=pos_float[2]; delta_z=target_z-current_z
+                    if abs(delta_z)<movement_speed: # Reached target Z
+                        pos_float[2]=target_z # Snap to target
+                        cube_state["phase"]="rectangle_init" # Go back to rectangle phase
+                        if POSITIONAL_DEBUG: print(f"  {self.name}: Target Z reached. Phase -> {cube_state['phase']}")
+                    else: # Move towards target Z
+                        pos_float[2]+=np.sign(delta_z)*movement_speed
+
+        # --- Update Position and Path ---
+        # Clip final calculated position using the potentially overridden grid size
+        self.position = np.clip(pos_float, 0, current_grid_size - 1)
+        # Manually append to path since we didn't call BaseObject.move
+        self.path.append(self.position.copy())
 
 #===============================================
 # Simulation Engine (Visualization - unchanged logic)

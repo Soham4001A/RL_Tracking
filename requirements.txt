@@ -1,0 +1,8 @@
+gymnasium
+numpy
+matplotlib
+stable-baselines3
+torch
+torchinfo
+os
+random

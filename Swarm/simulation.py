@@ -11,24 +11,16 @@ import os
 import torch
 import time
 import random # For curriculum selection
+from classes import *
 
 # Internal Module Imports - Assumes classes.py is updated
 try:
     # Import necessary classes - LMAFeaturesExtractor, Transformer, CCA, Foxtrot
     from classes import *
-    # Check if Transformer exists, handle if not for backward compatibility maybe?
-    if not hasattr(globals(), 'Transformer'):
-         print("Warning: 'Transformer' class not found in classes.py. MHA options will fail.")
-         # Define a dummy if needed? Or just let it fail if selected.
-         class Transformer: pass # Dummy placeholder
 except ImportError as e:
     print(f"Error importing from classes.py: {e}")
     print("Please ensure classes.py is updated and in the same directory or your PYTHONPATH.")
     exit()
-except NameError as e:
-     print(f"Error: A class (like Transformer) might be missing from classes.py: {e}")
-     exit()
-
 
 # Import globals or set defaults
 try:
@@ -41,7 +33,7 @@ try:
     globals.RECTANGULAR_FOXTROT = True # Foxtrot moves in cube pattern
     globals.RAND_POS = True
     globals.FIXED_POS = False
-    globals.PROXIMITY_CCA = False
+    globals.PROXIMITY_CCA = True
     globals.RAND_FIXED_CCA = False
 except ImportError:
     print("WARNING!: 'globals.py' not found or not fully configured. Using defaults.")
@@ -54,7 +46,7 @@ except ImportError:
         RECTANGULAR_FOXTROT = True
         RAND_POS = True
         FIXED_POS = False
-        PROXIMITY_CCA = False
+        PROXIMITY_CCA = True
         RAND_FIXED_CCA = False
     globals = MockGlobals()
 
@@ -74,7 +66,7 @@ class PPOSwarmCurriculumEnv(gym.Env):
     metadata = {"render_modes": ["human"], "render_fps": 30}
     SUPPORTED_FORMATIONS = ['square', 'circle', 'line', 'wedge']
 
-    def __init__(self, grid_size=DEFAULT_GRID_SIZE, num_cca=4, history_len=30,
+    def __init__(self, grid_size=DEFAULT_GRID_SIZE, num_cca=4, history_len=31,
                  step_size_env=DEFAULT_STEP_SIZE, formation_scale=50.0,
                  initial_formation=None):
         super().__init__()
@@ -84,7 +76,7 @@ class PPOSwarmCurriculumEnv(gym.Env):
         self.step_size = step_size_env
         self.formation_scale = formation_scale
         self.cca_collision_radius = 5.0 # For collision penalty
-        self.max_steps = 3600
+        self.max_steps = 600
 
         # Curriculum State
         self.formation_map = {name: i for i, name in enumerate(self.SUPPORTED_FORMATIONS)}
@@ -104,6 +96,7 @@ class PPOSwarmCurriculumEnv(gym.Env):
         self.cca_objs = []
         self.previous_cca_positions = None
         self.previous_potential = 0.0 # For potential-based reward
+        self.previous_foxtrot_pos = None
 
         # Action Space
         self.action_space = spaces.Box(low=-self.step_size, high=self.step_size, shape=(self.num_cca, 3), dtype=np.float32)
@@ -181,6 +174,7 @@ class PPOSwarmCurriculumEnv(gym.Env):
         self.current_step = 0
         self.previous_cca_positions = None
         self.previous_potential = 0.0 # Reset potential for new episode
+        self.previous_foxtrot_pos = None
 
         # Curriculum Logic: Select formation unless 'keep_formation' is set for eval
         if not options or not options.get("keep_formation", False):
@@ -231,7 +225,8 @@ class PPOSwarmCurriculumEnv(gym.Env):
         clipped_actions = np.clip(actions, -self.step_size, self.step_size)
 
         # Store current positions before movement for reward calculation
-        self.previous_cca_positions = [cca.position.copy() for cca in self.cca_objs] # Store before move
+        self.previous_cca_positions = [cca.position.copy() for cca in self.cca_objs] # Store before move\
+        self.previous_foxtrot_pos = self.foxtrot_obj.position.copy() # Store before move
 
         # --- Move Foxtrot FIRST ---
         # Assumes move_cube method exists in the updated Foxtrot class
@@ -256,8 +251,11 @@ class PPOSwarmCurriculumEnv(gym.Env):
         reward = self._calculate_swarm_reward_potential(clipped_actions, current_cca_positions, current_foxtrot_pos)
 
         # Termination/Truncation
-        terminated = False
-        truncated = (self.current_step >= self.max_steps)
+        done = False
+        truncated = False
+
+        if self.current_step == self.max_steps:
+            done = truncated = True
 
         observation = self._get_observation()
         info = self.get_current_metrics(); info["current_formation"] = self.current_formation_type
@@ -265,7 +263,7 @@ class PPOSwarmCurriculumEnv(gym.Env):
         # Update potential for the *next* step's calculation AFTER calculating reward
         self.previous_potential = self._calculate_potential(current_cca_positions, current_foxtrot_pos)
 
-        return observation, reward, terminated, truncated, info
+        return observation, reward, done, truncated, info
 
     def _get_observation(self):
         # (Identical logic as before, concatenates all history parts including command)
@@ -298,77 +296,79 @@ class PPOSwarmCurriculumEnv(gym.Env):
 
     def _calculate_swarm_reward_potential(self, actions, current_cca_positions, current_foxtrot_pos):
         """
-        New reward function using potential-based shaping for swarm formation.
-        Inspired by the pursuit reward structure.
+        Simplified reward function matching reference with minimal formation adaptation.
         """
+        # Initialize reward
         reward = 0.0
+        
+        # Hyperparameters (identical to reference)
+        alpha = 450.0            # Weight for progress
+        beta = 0.05              # Weight for energy efficiency
+        gamma_collision = -2000.0  # Penalty for collisions
+        gamma = 0.1              # Potential shaping weight
+        capture_radius = 75.0    # Radius for capture bonus
+        
+        target_positions = current_foxtrot_pos + self.target_formation_offsets
+        
+        # Define the potential function
+        def potential(target_positions):
+            return -np.mean([np.linalg.norm(pos - self.foxtrot_obj.position) for pos in target_positions])
 
-        # --- Hyperparameters (Tune these!) ---
-        shaping_gamma = 0.5              # Weight for potential shaping (implicit progress)
-        formation_bonus = 500.0          # Bonus for achieving very good formation
-        formation_bonus_threshold = 5.0 # Avg error threshold for bonus (e.g., 5 units)
-        energy_beta = 0.1                # Weight for energy efficiency penalty
-        collision_gamma = -100.0         # Penalty scale for collisions (per collision pair)
-        bounds_gamma = -1.0              # Penalty scale for hitting bounds
+        # Current and previous potential
+        current_potential = potential(target_positions)
+        # Update previous potential for next step
+        self.previous_potential = current_potential
 
-        # --- 1. Potential-Based Reward Shaping ---
-        current_potential = self._calculate_potential(current_cca_positions, current_foxtrot_pos)
-        # Use self.previous_potential stored from the previous step
-        shaped_reward = shaping_gamma * (current_potential - self.previous_potential)
+        # Potential-based shaping (identical to reference)
+        shaped_reward = gamma * (current_potential - self.previous_potential)
         reward += shaped_reward
 
-        # --- 2. Formation Achievement Bonus ---
-        # Calculate current average error for the bonus check
-        target_positions_bonus = current_foxtrot_pos + self.target_formation_offsets
-        formation_errors = [np.linalg.norm(np.asarray(current_cca_positions[i]) - np.asarray(target_positions_bonus[i])) for i in range(self.num_cca)]
-        avg_formation_error = np.mean(formation_errors) if formation_errors else float('inf')
-
-        if avg_formation_error < formation_bonus_threshold:
-            reward += formation_bonus
-
-        # --- 3. Energy Efficiency Penalty ---
-        # Penalize based on the magnitude of actions taken
-        total_action_norm_sq = np.sum(actions**2) # Sum of squared norms is common
-        max_action_norm_sq = self.num_cca * 3 * (self.step_size**2)
-        normalized_energy = total_action_norm_sq / max_action_norm_sq if max_action_norm_sq > 0 else 0
-        reward -= energy_beta * normalized_energy # Linear penalty on normalized energy
-
-        # --- 4. Collision Penalty ---
-        collision_penalty_sum = 0.0
-        if self.num_cca > 1:
-            for i in range(self.num_cca):
-                for j in range(i + 1, self.num_cca):
-                    pos_i = np.asarray(current_cca_positions[i])
-                    pos_j = np.asarray(current_cca_positions[j])
-                    sep = np.linalg.norm(pos_i - pos_j)
-                    if sep < self.cca_collision_radius:
-                        # Penalty increases the closer they are
-                        collision_penalty_sum += collision_gamma # Constant penalty per collision pair per step
-                        # Optional: Scale penalty by overlap: collision_gamma * (self.cca_collision_radius - sep)
-            reward += collision_penalty_sum
-
-        # --- 5. Bounds Penalty ---
-        bounds_penalty_sum = 0.0
-        for pos in current_cca_positions:
-            pos_arr = np.asarray(pos)
-            # Check distance to min (0) and max (grid_size-1) boundaries
-            min_dist_to_edge = min(np.min(pos_arr), np.min(self.grid_size - 1 - pos_arr))
-            if min_dist_to_edge < 5.0: # Penalize if within 5 units of any edge
-                 bounds_penalty_sum += bounds_gamma * (5.0 - min_dist_to_edge) # Penalty increases closer to edge
-        reward += bounds_penalty_sum
-
-
-        # --- Debug Print (Focus on individual errors) ---
+        # Progress-Based Reward (simplified to match reference)
+        progress = 0.0
+        
+        for i in range(self.num_cca):
+            # Calculate progress toward target position (simpler)
+            current_distance = np.linalg.norm(np.asarray(current_cca_positions[i]) - np.asarray(target_positions[i]))
+            prev_distance = np.linalg.norm(np.asarray(self.previous_cca_positions[i]) - 
+                                        (self.previous_foxtrot_pos + self.target_formation_offsets[i]))
+            
+            agent_progress = prev_distance - current_distance
+            progress += agent_progress
+            
+            # Capture bonus (identical to reference)
+            if current_distance < capture_radius:
+                reward += 1000.0
+        
+        # Average progress across agents
+        if self.num_cca > 0:
+            progress /= self.num_cca
+            reward += alpha * progress
+        
+        # Energy Efficiency Penalty (identical to reference)
+        energy_penalty = beta * np.sum(np.linalg.norm(actions, axis=1))
+        reward -= energy_penalty
+        
+        # Collision Penalty (simplified) #THIS IS BROKEN
+        # collision_penalty = 0.0
+        # if self.num_cca > 1:
+        #     for i in range(self.num_cca):
+        #         for j in range(i + 1, self.num_cca):
+        #             pos_i = np.asarray(current_cca_positions[i])
+        #             pos_j = np.asarray(current_cca_positions[j])
+        #             sep = np.linalg.norm(pos_i - pos_j)
+        #             if sep < self.cca_collision_radius:
+        #                 collision_penalty += gamma_collision
+        
+        # reward += collision_penalty
+        
+        # Clip reward to prevent extreme values (identical to reference)
+        reward = np.clip(reward, -8000, 8000.0)
+        
+        # Debug output
         if REWARD_DEBUG and self.current_step % 10 == 0:
-            errors_str = ", ".join([f"{err:.2f}" for err in formation_errors])
-            debug_str = (f"Step {self.current_step} (Form: {self.current_formation_type}): R={reward:.2f} | Pot={current_potential:.2f} | "
-                         f"ShpR={shaped_reward:.3f} | Indiv Err: [{errors_str}] | CollPen={collision_penalty_sum:.2f}")
-            print(debug_str)
-        # --- End Debug Print ---
-
-        # Clip reward? Optional, helps stability but can hide issues.
-        # reward = np.clip(reward, -500, 1000)
-
+            distances_str = ", ".join([f"{np.linalg.norm(np.asarray(current_cca_positions[i]) - np.asarray(target_positions[i])):.2f}" for i in range(self.num_cca)])
+            print(f"Distances to targets: [{distances_str}], Raw Reward: {reward}, Progress: {progress}, Shaped: {shaped_reward}, Energy: {energy_penalty}")
+        
         return float(reward)
 
 
@@ -381,8 +381,11 @@ class PPOSwarmCurriculumEnv(gym.Env):
         seps = []; colls = 0
         if self.num_cca > 1:
             for i in range(self.num_cca):
-                for j in range(i + 1, self.num_cca): sep = np.linalg.norm(current_cca_pos[i] - current_cca_pos[j]); seps.append(sep)
-                if sep < self.cca_collision_radius: colls += 1
+                for j in range(i + 1, self.num_cca):
+                    sep = np.linalg.norm(current_cca_pos[i] - current_cca_pos[j])
+                    seps.append(sep)
+                    if sep < self.cca_collision_radius:
+                        colls += 1
             avg_sep = np.mean(seps) if seps else 0.0; min_sep = min(seps) if seps else 0.0
         else: avg_sep = 0.0; min_sep = 0.0
         return {"avg_formation_error": float(avg_error), "avg_separation": float(avg_sep), "min_separation": float(min_sep), "collisions": colls}
@@ -410,8 +413,8 @@ if __name__ == "__main__":
     GRID_SIZE = DEFAULT_GRID_SIZE
     STEP_SIZE = DEFAULT_STEP_SIZE
     NUM_CCA = 4
-    HISTORY_LEN = 30
-    FORMATION_SCALE = 50.0
+    HISTORY_LEN = 10
+    FORMATION_SCALE = 40.0
 
     # --- Create and wrap the environment ---
     env = PPOSwarmCurriculumEnv(grid_size=GRID_SIZE, num_cca=NUM_CCA, history_len=HISTORY_LEN,
@@ -426,10 +429,10 @@ if __name__ == "__main__":
         FeatureExtractor = LMAFeaturesExtractor
         # Use user's specific LMA kwargs
         kwargs = dict(
-            seq_len=HISTORY_LEN, embed_dim=128, num_heads_stacking=8,
+            seq_len=HISTORY_LEN, embed_dim=512, num_heads_stacking=32,
             target_l_new=int(HISTORY_LEN/2), # Ensure integer division if needed
-            d_new=64, num_heads_latent=8, ff_latent_hidden=64*4,
-            num_lma_layers=4, dropout=0.1, bias=True
+            d_new=256, num_heads_latent=32, ff_latent_hidden=256*6,
+            num_lma_layers=6, dropout=0.1, bias=True
         )
     elif config == "MHA" or config == "MHA_Lite": # Combine MHA/MHA_Lite logic
          print(f"Using {config} configuration (Transformer).")
@@ -449,7 +452,7 @@ if __name__ == "__main__":
         features_extractor_class=FeatureExtractor,
         features_extractor_kwargs=kwargs,
         # Use user's MLP head sizes
-        net_arch=dict(pi=[256, 128], vf=[256, 128])
+        net_arch=dict(pi=[512,256,256, 128], vf=[512,256,256, 128])
     )
 
     # --- Define PPO Model ---
@@ -461,8 +464,8 @@ if __name__ == "__main__":
         normalize_advantage=True, learning_rate=linear_schedule(0.0002),
         n_steps=600, batch_size=100, n_epochs=10,
         gamma=0.85, gae_lambda=0.8, clip_range=0.4,
-        ent_coef=0.002, vf_coef=0.75, max_grad_norm=0.5,
-        tensorboard_log= "./TensorBoardLogs/"
+        ent_coef=0.002, vf_coef=0.85, max_grad_norm=0.5,
+        tensorboard_log= "./TensorBoardLogs"
     )
 
     # --- Optional: Display Model Summary ---
@@ -481,10 +484,11 @@ if __name__ == "__main__":
 
     # --- Training ---
     print("\nStarting Training (Swarm Curriculum)...")
-    total_train_steps = 200_000 # User's increased steps
-
+    
     try:
-        model.learn(total_timesteps=total_train_steps, reset_num_timesteps=False) # User's reset setting
+        model.learn(total_timesteps=360_000)
+        globals.PROXIMITY_CCA = False
+        model.learn(total_timesteps=180_000)
     except KeyboardInterrupt: print("\nTraining interrupted.")
     except Exception as e: print(f"\nTraining error: {e}"); import traceback; traceback.print_exc()
 

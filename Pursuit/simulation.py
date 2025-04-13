@@ -16,8 +16,6 @@ from classes import *
 import globals # Assumes globals.py defines necessary flags and constants
 
 # Define DEBUG flags if not in globals
-try: DEBUG = globals.DEBUG
-except AttributeError: DEBUG = False # Default
 try: REWARD_DEBUG = globals.REWARD_DEBUG
 except AttributeError: REWARD_DEBUG = False # Default
 try: POSITIONAL_DEBUG = globals.POSITIONAL_DEBUG
@@ -359,7 +357,7 @@ if __name__ == "__main__":
             seq_len=6, # Ensure this matches env history_len
             embed_dim=128,         # Default in classes.py
             num_heads_stacking=8, # Default
-            target_l_new=6/2,      # Default
+            target_l_new=3,      # Default
             d_new=64,             # Default
             num_heads_latent=8,   # Default
             ff_latent_hidden=64*4,  # Default
@@ -385,7 +383,7 @@ if __name__ == "__main__":
             num_heads=8,
             ff_hidden=64*4,
             num_layers=4,
-            seq_len=6)
+            seq_len=3)
     else:
         print("Invalid configuration. Oops!")
         exit()
@@ -435,7 +433,7 @@ if __name__ == "__main__":
         ent_coef=0.0,             # Entropy coefficient (0 to disable)
         vf_coef=0.85,              # Value function loss coefficient
         #max_grad_norm=0.5,        # Gradient clipping
-        tensorboard_log="./TensorBoardLogs/", # Example path
+        tensorboard_log="./TensorBoardLogs", # Example path
         **model_specific_kwargs,    # Add GRPO specific args if using GRPO
     )
 
@@ -444,34 +442,6 @@ if __name__ == "__main__":
     # Cirriculum Learning
     globals.COMPLEX_REWARD = True 
 
-
-    """
-    # Train the model with stationary foxtrot and small random CCA
-    globals.RECTANGULAR_FOXTROT = False
-    globals.STATIONARY_FOXTROT = True
-    globals.RAND_POS = False #This is for stationary foxtrot & TODO: should be rewritten as so
-    globals.FIXED_POS = True #This is for stationary foxtrot & TODO: should be rewritten as so
-    globals.RAND_FIXED_CCA = True
-    model.learn(total_timesteps=70_000)
-
-    # Continutation but now CCA's are random spawn farther away
-    globals.RECTANGULAR_FOXTROT = False
-    globals.STATIONARY_FOXTROT = True
-    globals.RAND_POS = False #This is for stationary foxtrot & TODO: should be rewritten as so
-    globals.FIXED_POS = True #This is for stationary foxtrot & TODO: should be rewritten as so
-    globals.RAND_FIXED_CCA = False
-    model.learn(total_timesteps=140_000)
-
-    # Continue with random stationary foxtrot and random spawn CCA (maybed small gridsize too)
-    globals.RECTANGULAR_FOXTROT = False
-    globals.STATIONARY_FOXTROT = True
-    globals.FIXED_POS = False #This is for stationary foxtrot & TODO: should be rewritten as so
-    globals.RAND_POS = True #This is for stationary foxtrot & TODO: should be rewritten as so
-    globals.RAND_FIXED_CCA = False
-    model.learn(total_timesteps=350_000) 
-    
-    """
-    
     from torchinfo import summary
     # Example: model = MyModel()
     summary(model.policy, input_size=(64, *env.observation_space.shape))
@@ -480,17 +450,17 @@ if __name__ == "__main__":
     if proceed.lower() != 'y':
         print("Training aborted.")
         exit()
-
+      
     # --- Continue Training with moving foxtrot ---
     # Finally, train it to follow a movement function - spawn CCA's at same location as foxtrot initially
     globals.STATIONARY_FOXTROT = False
     globals.RECTANGULAR_FOXTROT = True
     globals.RAND_FIXED_CCA = False
     globals.PROXIMITY_CCA = True
-    model.learn(total_timesteps=180_000)
+    model.learn(total_timesteps=270_000)
 
-    #globals.PROXIMITY_CCA = False
-    #model.learn(total_timesteps=90_000)
+    globals.PROXIMITY_CCA = False
+    model.learn(total_timesteps=180_000)
 
 
     # --- Save Model and Environment Wrapper ---
