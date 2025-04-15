@@ -160,7 +160,7 @@ class Foxtrot(BaseObject):
                 v2=center_xy+np.array([-half_l,-half_w]); v3=center_xy+np.array([+half_l,-half_w])
                 rect_info["vertices"]=[v0,v1,v2,v3]; rect_info["current_target_idx"]=0
                 rect_info["laps_completed"]=0; cube_state["phase"]="rectangle_move"
-                if POSITIONAL_DEBUG: print(f"  {self.name}: Init Rect @ {center_xy.round(1)}. Phase -> {cube_state['phase']}")
+                #if POSITIONAL_DEBUG: print(f"  {self.name}: Init Rect @ {center_xy.round(1)}. Phase -> {cube_state['phase']}")
                 # No actual position change in init step
 
             elif phase == "rectangle_move":
@@ -175,10 +175,10 @@ class Foxtrot(BaseObject):
                         next_target_idx=(target_idx+1)%len(vertices); rect_info["current_target_idx"]=next_target_idx
                         if next_target_idx == 0: # Completed a lap
                             laps = rect_info.get("laps_completed", 0) + 1; rect_info["laps_completed"] = laps
-                            if POSITIONAL_DEBUG: print(f"  {self.name}: Lap {laps} complete.")
+                            #if POSITIONAL_DEBUG: print(f"  {self.name}: Lap {laps} complete.")
                             if laps >= 1: # Move to Z phase after 1 lap
                                 cube_state["phase"] = "z_move_init";
-                                if POSITIONAL_DEBUG: print(f"  {self.name}: Rect done. Phase -> {cube_state['phase']}")
+                                #if POSITIONAL_DEBUG: print(f"  {self.name}: Rect done. Phase -> {cube_state['phase']}")
                     else: # Move towards target vertex
                         step_vector_xy=(direction_xy/dist_xy)*movement_speed; pos_float[:2]+=step_vector_xy
 
@@ -189,7 +189,7 @@ class Foxtrot(BaseObject):
             if phase == "z_move_init":
                 # Randomize target Z using the potentially overridden grid size
                 z_info["target_z"]=np.random.uniform(0, current_grid_size); cube_state["phase"]="z_move"
-                if POSITIONAL_DEBUG: print(f"  {self.name}: Init Z. Target: {z_info['target_z']:.1f}. Phase -> {cube_state['phase']}")
+                #if POSITIONAL_DEBUG: print(f"  {self.name}: Init Z. Target: {z_info['target_z']:.1f}. Phase -> {cube_state['phase']}")
                 # No actual position change in init step
 
             elif phase == "z_move":
@@ -201,7 +201,7 @@ class Foxtrot(BaseObject):
                     if abs(delta_z)<movement_speed: # Reached target Z
                         pos_float[2]=target_z # Snap to target
                         cube_state["phase"]="rectangle_init" # Go back to rectangle phase
-                        if POSITIONAL_DEBUG: print(f"  {self.name}: Target Z reached. Phase -> {cube_state['phase']}")
+                        #if POSITIONAL_DEBUG: print(f"  {self.name}: Target Z reached. Phase -> {cube_state['phase']}")
                     else: # Move towards target Z
                         pos_float[2]+=np.sign(delta_z)*movement_speed
 

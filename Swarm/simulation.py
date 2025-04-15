@@ -76,7 +76,7 @@ class PPOSwarmCurriculumEnv(gym.Env):
         self.step_size = step_size_env
         self.formation_scale = formation_scale
         self.cca_collision_radius = 5.0 # For collision penalty
-        self.max_steps = 600
+        self.max_steps = 400
 
         # Curriculum State
         self.formation_map = {name: i for i, name in enumerate(self.SUPPORTED_FORMATIONS)}
@@ -95,7 +95,8 @@ class PPOSwarmCurriculumEnv(gym.Env):
         self.foxtrot_obj = None
         self.cca_objs = []
         self.previous_cca_positions = None
-        self.previous_potential = 0.0 # For potential-based reward
+        self.current_potential = [0.0] * self.num_cca # For potential-based reward
+        self.previous_potential = [0.0] * self.num_cca # For potential-based reward
         self.previous_foxtrot_pos = None
 
         # Action Space
@@ -173,7 +174,8 @@ class PPOSwarmCurriculumEnv(gym.Env):
         super().reset(seed=seed)
         self.current_step = 0
         self.previous_cca_positions = None
-        self.previous_potential = 0.0 # Reset potential for new episode
+        self.current_potential = [0.0] * self.num_cca # Reset potential for new episode
+        self.previous_potential = [0.0] * self.num_cca # Reset potential for new episode
         self.previous_foxtrot_pos = None
 
         # Curriculum Logic: Select formation unless 'keep_formation' is set for eval
@@ -195,9 +197,14 @@ class PPOSwarmCurriculumEnv(gym.Env):
         target_positions = self.foxtrot_obj.position + self.target_formation_offsets
         for i in range(self.num_cca):
             # Use the wider spawn range
-            start_pos = target_positions[i] + self.np_random.uniform(-300, 300, size=3)
-            start_pos = np.clip(start_pos, 0, self.grid_size - 1)
-            self.cca_objs.append(CCA(f"CCA_{i}", start_pos))
+            if globals.PROXIMITY_CCA:
+                start_pos = target_positions[i] + self.np_random.uniform(-30, 30, size=3)
+                start_pos = np.clip(start_pos, 0, self.grid_size - 1)
+                self.cca_objs.append(CCA(f"CCA_{i}", start_pos))
+            else:
+                start_pos = target_positions[i] + self.np_random.uniform(-300, 300, size=3)
+                start_pos = np.clip(start_pos, 0, self.grid_size - 1)
+                self.cca_objs.append(CCA(f"CCA_{i}", start_pos))
 
         # Reset Histories
         self.action_history = [np.zeros((self.history_len, 3), dtype=np.float32) for _ in range(self.num_cca)]
@@ -206,9 +213,6 @@ class PPOSwarmCurriculumEnv(gym.Env):
         self.formation_cmd_history = np.tile(self.current_formation_onehot, (self.history_len, 1))
 
         self.previous_cca_positions = [cca.position.copy() for cca in self.cca_objs]
-
-        # Calculate initial potential AFTER setting previous positions
-        self.previous_potential = self._calculate_potential(self.previous_cca_positions, self.foxtrot_obj.position)
 
         if POSITIONAL_DEBUG:
             print(f"{self.foxtrot_obj.name} @ {self.foxtrot_obj.position.round(1)}\n" +
@@ -228,12 +232,6 @@ class PPOSwarmCurriculumEnv(gym.Env):
         self.previous_cca_positions = [cca.position.copy() for cca in self.cca_objs] # Store before move\
         self.previous_foxtrot_pos = self.foxtrot_obj.position.copy() # Store before move
 
-        # --- Move Foxtrot FIRST ---
-        # Assumes move_cube method exists in the updated Foxtrot class
-        if globals.RECTANGULAR_FOXTROT:
-            self.foxtrot_obj.move_cube(self.grid_size, self.step_size)
-        current_foxtrot_pos = self.foxtrot_obj.position.copy()
-
         # --- Move CCAs ---
         current_cca_positions = []
         for i in range(self.num_cca):
@@ -243,12 +241,17 @@ class PPOSwarmCurriculumEnv(gym.Env):
             self.cca_history[i]=np.roll(self.cca_history[i],shift=-1,axis=0); self.cca_history[i][-1]=self.cca_objs[i].position
             current_cca_positions.append(self.cca_objs[i].position.copy())
 
+         # --- Calculate Reward using Potential Shaping ---
+        reward = self._calculate_swarm_reward_potential(clipped_actions, current_cca_positions, self.foxtrot_obj.position)
+        
+        # --- Move Foxtrot ---
+        if globals.RECTANGULAR_FOXTROT:
+            self.foxtrot_obj.move_cube(self.grid_size, self.step_size)
+        current_foxtrot_pos = self.foxtrot_obj.position.copy()
+        
         # --- Update Histories ---
         self.foxtrot_history = np.roll(self.foxtrot_history, shift=-1, axis=0); self.foxtrot_history[-1] = current_foxtrot_pos
         self.formation_cmd_history = np.roll(self.formation_cmd_history, shift=-1, axis=0); self.formation_cmd_history[-1] = self.current_formation_onehot
-
-        # --- Calculate Reward using Potential Shaping ---
-        reward = self._calculate_swarm_reward_potential(clipped_actions, current_cca_positions, current_foxtrot_pos)
 
         # Termination/Truncation
         done = False
@@ -259,9 +262,6 @@ class PPOSwarmCurriculumEnv(gym.Env):
 
         observation = self._get_observation()
         info = self.get_current_metrics(); info["current_formation"] = self.current_formation_type
-
-        # Update potential for the *next* step's calculation AFTER calculating reward
-        self.previous_potential = self._calculate_potential(current_cca_positions, current_foxtrot_pos)
 
         return observation, reward, done, truncated, info
 
@@ -302,47 +302,55 @@ class PPOSwarmCurriculumEnv(gym.Env):
         reward = 0.0
         
         # Hyperparameters (identical to reference)
-        alpha = 450.0            # Weight for progress
+        alpha = 300           # Weight for progress
         beta = 0.05              # Weight for energy efficiency
         gamma_collision = -2000.0  # Penalty for collisions
         gamma = 0.1              # Potential shaping weight
-        capture_radius = 75.0    # Radius for capture bonus
+        capture_radius = 15.0    # Radius for capture bonus
         
         target_positions = current_foxtrot_pos + self.target_formation_offsets
         
         # Define the potential function
-        def potential(target_positions):
-            return -np.mean([np.linalg.norm(pos - self.foxtrot_obj.position) for pos in target_positions])
+        def potential(pos):
+            return float(-np.mean([np.linalg.norm(pos - self.foxtrot_obj.position)]))
 
+        potential_reward = 0
+        for i in range(self.num_cca):
         # Current and previous potential
-        current_potential = potential(target_positions)
-        # Update previous potential for next step
-        self.previous_potential = current_potential
+            self.current_potential[i] = potential(target_positions[i])
+            # Potential-based shaping (identical to reference)
+            shaped_reward = gamma * (self.current_potential[i] - self.previous_potential[i])
+            # Update previous potential for next step
+            self.previous_potential[i] = self.current_potential[i]
+            potential_reward += shaped_reward
 
-        # Potential-based shaping (identical to reference)
-        shaped_reward = gamma * (current_potential - self.previous_potential)
-        reward += shaped_reward
-
+        if self.num_cca > 0:
+            potential_reward /= self.num_cca
+            reward += potential_reward
+            
+            
         # Progress-Based Reward (simplified to match reference)
-        progress = 0.0
-        
+        total_progress = 0.0
         for i in range(self.num_cca):
             # Calculate progress toward target position (simpler)
-            current_distance = np.linalg.norm(np.asarray(current_cca_positions[i]) - np.asarray(target_positions[i]))
-            prev_distance = np.linalg.norm(np.asarray(self.previous_cca_positions[i]) - 
-                                        (self.previous_foxtrot_pos + self.target_formation_offsets[i]))
+            current_distance = np.linalg.norm((current_cca_positions[i]) - (target_positions[i]))
+            prev_distance = np.linalg.norm((self.previous_cca_positions[i]) - 
+                                        (target_positions[i]))
             
-            agent_progress = prev_distance - current_distance
-            progress += agent_progress
+            # If the distance increased, we penalize
+            if prev_distance <= current_distance:
+                negative_progress = abs(current_distance - prev_distance)
+                reward -= negative_progress * alpha
+                total_progress -= negative_progress
+            # If the distance decreased, we reward
+            elif prev_distance > current_distance:
+                positive_progress = abs(prev_distance - current_distance)
+                reward += positive_progress * alpha
+                total_progress += positive_progress
             
             # Capture bonus (identical to reference)
             if current_distance < capture_radius:
                 reward += 1000.0
-        
-        # Average progress across agents
-        if self.num_cca > 0:
-            progress /= self.num_cca
-            reward += alpha * progress
         
         # Energy Efficiency Penalty (identical to reference)
         energy_penalty = beta * np.sum(np.linalg.norm(actions, axis=1))
@@ -362,12 +370,12 @@ class PPOSwarmCurriculumEnv(gym.Env):
         # reward += collision_penalty
         
         # Clip reward to prevent extreme values (identical to reference)
-        reward = np.clip(reward, -8000, 8000.0)
+        reward = np.clip(reward, float(-2000*self.num_cca), float(2000.0*self.num_cca))
         
         # Debug output
-        if REWARD_DEBUG and self.current_step % 10 == 0:
+        if REWARD_DEBUG and self.current_step % 1 == 0:
             distances_str = ", ".join([f"{np.linalg.norm(np.asarray(current_cca_positions[i]) - np.asarray(target_positions[i])):.2f}" for i in range(self.num_cca)])
-            print(f"Distances to targets: [{distances_str}], Raw Reward: {reward}, Progress: {progress}, Shaped: {shaped_reward}, Energy: {energy_penalty}")
+            print(f"Distances to targets: [{distances_str}], Raw Reward: {reward}, Progress Reward: {total_progress}, Potential Reward: {potential_reward}")
         
         return float(reward)
 
@@ -429,9 +437,9 @@ if __name__ == "__main__":
         FeatureExtractor = LMAFeaturesExtractor
         # Use user's specific LMA kwargs
         kwargs = dict(
-            seq_len=HISTORY_LEN, embed_dim=512, num_heads_stacking=32,
+            seq_len=HISTORY_LEN, embed_dim=512, num_heads_stacking=16,
             target_l_new=int(HISTORY_LEN/2), # Ensure integer division if needed
-            d_new=256, num_heads_latent=32, ff_latent_hidden=256*6,
+            d_new=256, num_heads_latent=16, ff_latent_hidden=256*6,
             num_lma_layers=6, dropout=0.1, bias=True
         )
     elif config == "MHA" or config == "MHA_Lite": # Combine MHA/MHA_Lite logic
@@ -452,7 +460,7 @@ if __name__ == "__main__":
         features_extractor_class=FeatureExtractor,
         features_extractor_kwargs=kwargs,
         # Use user's MLP head sizes
-        net_arch=dict(pi=[512,256,256, 128], vf=[512,256,256, 128])
+        net_arch=dict(pi=[512,512,256, 256], vf=[512,512,512,256, 128])
     )
 
     # --- Define PPO Model ---
@@ -463,7 +471,7 @@ if __name__ == "__main__":
         policy="MlpPolicy", policy_kwargs=policy_kwargs, env=vec_env, verbose=1,
         normalize_advantage=True, learning_rate=linear_schedule(0.0002),
         n_steps=600, batch_size=100, n_epochs=10,
-        gamma=0.85, gae_lambda=0.8, clip_range=0.4,
+        gamma=0.9, gae_lambda=0.9, clip_range=0.4,
         ent_coef=0.002, vf_coef=0.85, max_grad_norm=0.5,
         tensorboard_log= "./TensorBoardLogs"
     )
@@ -486,9 +494,9 @@ if __name__ == "__main__":
     print("\nStarting Training (Swarm Curriculum)...")
     
     try:
-        model.learn(total_timesteps=360_000)
-        globals.PROXIMITY_CCA = False
-        model.learn(total_timesteps=180_000)
+        model.learn(total_timesteps=300_000)
+        #globals.PROXIMITY_CCA = False
+        #model.learn(total_timesteps=100_000) #You should implement ciriculum learning within the enviornment itself
     except KeyboardInterrupt: print("\nTraining interrupted.")
     except Exception as e: print(f"\nTraining error: {e}"); import traceback; traceback.print_exc()
 
