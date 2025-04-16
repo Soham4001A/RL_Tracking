@@ -174,16 +174,35 @@ def train_and_evaluate(env_id, config):
             # Evaluation
             eval_env = gym.make(env_id)
             episode_rewards = []
-            for _ in range(eval_episodes):
-                obs, _ = eval_env.reset()
-                done = False
-                total_reward = 0
-                while not done:
-                    action, _ = model.predict(obs, deterministic=True)
-                    obs, reward, term, trunc, _ = eval_env.step(action)
-                    total_reward += reward
-                    done = bool(term or trunc)
-                episode_rewards.append(total_reward)
+            for ep in range(eval_episodes):
+                try:
+                    obs, _ = eval_env.reset()
+                    done = False
+                    total_reward = 0
+                    while not done:
+                        try:
+                            action, _ = model.predict(obs, deterministic=True)
+                        except Exception as e:
+                            with open("results.log", "a") as f:
+                                f.write(f"Error during model.predict in episode {ep}: {e}\n")
+                            break
+                        try:
+                            obs, reward, term, trunc, _ = eval_env.step(action)
+                        except Exception as e:
+                            with open("results.log", "a") as f:
+                                f.write(f"Error during env.step in episode {ep}: {e}\n")
+                            break
+                        if reward is None:
+                            with open("results.log", "a") as f:
+                                f.write(f"Reward is None in episode {ep}\n")
+                            break
+                        total_reward += reward
+                        done = bool(term or trunc)
+                    else:
+                        episode_rewards.append(total_reward)
+                except Exception as e:
+                    with open("results.log", "a") as f:
+                        f.write(f"Error during evaluation episode {ep}: {e}\n")
             if len(episode_rewards) == 0:
                 results[env_id] = {'mean': 'Error: No episodes completed during evaluation', 'std': None}
             else:
