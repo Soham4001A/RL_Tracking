@@ -42,11 +42,14 @@ def get_env_hyperparams(env_id):
     if env_id == "BipedalWalker-v3":
         return {
             "total_timesteps": 2_000_000,
-            "learning_rate": 3e-4,
+            "learning_rate": 1e-4,  # Reduced from 3e-4
             "buffer_size": 2_000_000,
-            "batch_size": 256,
+            "batch_size": 512,      # Increased from 256
             "gamma": 0.99,
-            "tau": 0.005
+            "tau": 0.005,
+            "ent_coef": "auto",     # Using automatic entropy tuning
+            "target_entropy": -3,    # Target entropy for BipedalWalker
+            "learning_starts": 25000 # Increased learning starts
         }
     elif env_id == "MountainCarContinuous-v0":
         return {
@@ -54,17 +57,23 @@ def get_env_hyperparams(env_id):
             "learning_rate": 3e-4,
             "buffer_size": 500_000,
             "batch_size": 256,
-            "gamma": 0.999,  # Higher gamma for sparse rewards
-            "tau": 0.005
+            "gamma": 0.999,
+            "tau": 0.005,
+            "ent_coef": "auto",
+            "target_entropy": -2
         }
     else:  # Pendulum-v1
         return {
             "total_timesteps": 1_000_000,
-            "learning_rate": 3e-4,
+            "learning_rate": 7e-5,   # Further reduced for stability
             "buffer_size": 1_000_000,
-            "batch_size": 256,
+            "batch_size": 512,       # Increased batch size
             "gamma": 0.99,
-            "tau": 0.005
+            "tau": 0.01,            # Slightly increased for faster target update
+            "ent_coef": "auto",     # Using automatic entropy tuning
+            "target_entropy": -2,    # Target entropy for Pendulum
+            "train_freq": (1, "episode"),  # Update every episode
+            "gradient_steps": -1     # Update as many times as possible
         }
 
 def train_and_evaluate(env_id, config):
@@ -119,11 +128,14 @@ def train_and_evaluate(env_id, config):
                         dropout=0.1, seq_len = config_seq_len 
                     )
                     
-            env = make_vec_env(env_id, n_envs=25)
+            # Increase number of parallel environments for better GPU utilization
+            env = make_vec_env(env_id, n_envs=64)  # Changed from 25 to 64
+            
+            # Update policy kwargs with optimized network architecture
             policy_kwargs = dict(
                 features_extractor_class=features_extractor_class,
-                features_extractor_kwargs=extractor_kwargs
-                
+                features_extractor_kwargs=extractor_kwargs,
+                net_arch=dict(pi=[256, 256], qf=[512, 512])  # Wider networks
             )
             
             obs_dim = env.observation_space.shape[0]
@@ -141,9 +153,11 @@ def train_and_evaluate(env_id, config):
                        batch_size=hyperparams["batch_size"],
                        tau=hyperparams["tau"],
                        gamma=hyperparams["gamma"],
-                       train_freq=1,
-                       gradient_steps=1,
-                       learning_starts=10000,
+                       ent_coef=hyperparams.get("ent_coef", "auto"),
+                       target_entropy=hyperparams.get("target_entropy", None),
+                       train_freq=hyperparams.get("train_freq", 1),
+                       gradient_steps=hyperparams.get("gradient_steps", 1),
+                       learning_starts=hyperparams.get("learning_starts", 10000),
                        policy_kwargs=policy_kwargs, 
                        tensorboard_log="./TensorBoardLogs", 
                        verbose=1)
