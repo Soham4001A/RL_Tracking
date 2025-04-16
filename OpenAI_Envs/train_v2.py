@@ -74,8 +74,8 @@ TABLE_B = {
 # 2.  Safe wrapper for any extractor
 # -----------------------------------------------------------------------------
 class SafeFeaturesExtractor(BaseFeaturesExtractor):
-    def __init__(self, extractor_cls, *args, **kwargs):
-        self.inner = extractor_cls(*args, **kwargs)
+    def __init__(self, observation_space, extractor_cls=None, **kwargs):
+        self.inner = extractor_cls(observation_space, **kwargs)
         super().__init__(self.inner.observation_space, self.inner.features_dim)
 
     def forward(self, obs):
@@ -108,7 +108,7 @@ def run(env_id: str, table_cfg: dict, extractor_mode: str):
 
     policy_kwargs = dict(net_arch=cfg["net_arch"])
     if feat_cls:
-        policy_kwargs.update(features_extractor_class=SafeFeaturesExtractor, features_extractor_kwargs=dict(extractor_cls=feat_cls, observation_space=env.observation_space, **feat_kwargs))
+        policy_kwargs.update(features_extractor_class=SafeFeaturesExtractor, features_extractor_kwargs=dict(extractor_cls=feat_cls, **feat_kwargs))
 
     model = SAC(
         "MlpPolicy",
@@ -123,7 +123,7 @@ def run(env_id: str, table_cfg: dict, extractor_mode: str):
         gradient_steps=cfg["grad_steps"],
         policy_kwargs=policy_kwargs,
         device="cuda" if th.cuda.is_available() else "cpu",
-        verbose=0,
+        verbose=1,
     )
 
     model.learn(total_timesteps=cfg["total_steps"], progress_bar=True)
