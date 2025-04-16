@@ -182,11 +182,14 @@ def train_and_evaluate(env_id, config):
                     action, _ = model.predict(obs, deterministic=True)
                     obs, reward, term, trunc, _ = eval_env.step(action)
                     total_reward += reward
-                    done = bool(term or trunc)  # Convert to standard Python boolean
+                    done = bool(term or trunc)
                 episode_rewards.append(total_reward)
-            avg_reward = float(np.mean(episode_rewards))
-            std_reward = float(np.std(episode_rewards))
-            results[env_id] = {'mean': avg_reward, 'std': std_reward}
+            if len(episode_rewards) == 0:
+                results[env_id] = {'mean': 'Error: No episodes completed during evaluation', 'std': None}
+            else:
+                avg_reward = float(np.mean(episode_rewards))
+                std_reward = float(np.std(episode_rewards))
+                results[env_id] = {'mean': avg_reward, 'std': std_reward}
         except Exception as e:
             results[env_id] = {'mean': f"Error: {e}", 'std': None}
 
