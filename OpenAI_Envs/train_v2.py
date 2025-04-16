@@ -147,12 +147,17 @@ def train_and_evaluate(env_id, config):
             # Increase number of parallel environments for better GPU utilization
             env = make_vec_env(env_id, n_envs=64)  # Changed from 25 to 64
             
-            # Update policy kwargs with optimized network architecture
-            policy_kwargs = dict(
-                features_extractor_class=features_extractor_class,
-                features_extractor_kwargs=extractor_kwargs,
-                net_arch=dict(pi=[256, 256], qf=[512, 512])  # Wider networks
-            )
+            # Only apply custom feature extractor settings when not using Baseline
+            if config != "Baseline":
+                policy_kwargs = dict(
+                    features_extractor_class=features_extractor_class,
+                    features_extractor_kwargs=extractor_kwargs,
+                    net_arch=dict(pi=[256, 256], qf=[512, 512])
+                )
+            else:
+                policy_kwargs = dict(
+                    net_arch=dict(pi=[256, 256], qf=[512, 512])
+                )
             
             obs_dim = env.observation_space.shape[0]
             print(f"Environment Observation Dimension: {obs_dim}")
@@ -174,22 +179,39 @@ def train_and_evaluate(env_id, config):
                 features = extractor(dummy_obs_tensor)
                 debug_tensor(features, "Feature extractor output")
 
-            # Create SAC model with environment-specific hyperparameters
-            model = SAC("MlpPolicy", 
-                       env, 
-                       learning_rate=hyperparams["learning_rate"],
-                       buffer_size=hyperparams["buffer_size"],
-                       batch_size=hyperparams["batch_size"],
-                       tau=hyperparams["tau"],
-                       gamma=hyperparams["gamma"],
-                       ent_coef=hyperparams.get("ent_coef", "auto"),
-                       target_entropy=hyperparams.get("target_entropy", None),
-                       train_freq=hyperparams.get("train_freq", 1),
-                       gradient_steps=hyperparams.get("gradient_steps", 1),
-                       learning_starts=hyperparams.get("learning_starts", 10000),
-                       policy_kwargs=policy_kwargs, 
-                       tensorboard_log="./TensorBoardLogs", 
-                       verbose=1)
+            # Verify policy_kwargs before model creation
+            with open("debug.log", "a") as f:
+                f.write(f"\nPolicy kwargs for {env_id} with {config}:\n{policy_kwargs}\n")
+
+            # Handle batched observations for feature extractors
+            if features_extractor_class:
+                dummy_batch = env.observation_space.sample()
+                if len(dummy_batch.shape) == 1:  # Single observation
+                    dummy_batch = np.stack([dummy_batch] * env.num_envs)
+                dummy_batch_tensor = th.as_tensor(dummy_batch).float()
+                with open("debug.log", "a") as f:
+                    f.write(f"\nTesting feature extractor with batched input:\n")
+                    f.write(f"Input shape: {dummy_batch_tensor.shape}\n")
+                features = extractor(dummy_batch_tensor)
+                debug_tensor(features, "Batched feature extractor output")
+
+            # Create SAC model
+            try:
+                model = SAC("MlpPolicy", 
+                           env, 
+                           learning_rate=hyperparams["learning_rate"],
+                           buffer_size=hyperparams["buffer_size"],
+                           batch_size=hyperparams["batch_size"],
+                           learning_starts=hyperparams["learning_starts"],
+                           policy_kwargs=policy_kwargs, 
+                           tensorboard_log="./TensorBoardLogs", 
+                           verbose=1)
+                with open("debug.log", "a") as f:
+                    f.write(f"\nModel created successfully for {env_id} with {config}\n")
+            except Exception as e:
+                with open("debug.log", "a") as f:
+                    f.write(f"\nError creating model: {str(e)}\n")
+                raise e
             
             print(f"Starting training for {env_id} with {config}...")
             model.learn(total_timesteps=hyperparams["total_timesteps"], 
