@@ -232,6 +232,12 @@ def train_and_evaluate(env_id, config):
                 with open("debug.log", "a") as f:
                     f.write(f"Feature extractor output shape: {features.shape}\n")
 
+            # Merge policy_kwargs from hyperparams and custom extractor, avoiding duplicate net_arch
+            merged_policy_kwargs = hyperparams.get("policy_kwargs", {}).copy()
+            if config != "Baseline":
+                merged_policy_kwargs["features_extractor_class"] = features_extractor_class
+                merged_policy_kwargs["features_extractor_kwargs"] = extractor_kwargs
+
             # Create SAC model
             try:
                 model = SAC("MlpPolicy", 
@@ -242,13 +248,7 @@ def train_and_evaluate(env_id, config):
                            learning_starts=hyperparams["learning_starts"],
                            ent_coef=hyperparams.get("ent_coef", "auto"),
                            target_entropy=hyperparams.get("target_entropy", None),
-                           policy_kwargs=dict(
-                               **hyperparams.get("policy_kwargs", {}),
-                               **(policy_kwargs if policy_kwargs else {}),
-                               use_expln=hyperparams.get("use_expln", False),
-                               use_sde=hyperparams.get("use_sde", False),
-                               sde_sample_freq=hyperparams.get("sde_sample_freq", -1),
-                           ),
+                           policy_kwargs=merged_policy_kwargs,
                            tensorboard_log="./TensorBoardLogs", 
                            verbose=1)
                 with open("debug.log", "a") as f:
