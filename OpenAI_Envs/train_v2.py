@@ -92,6 +92,12 @@ def debug_tensor(tensor, name):
             f.write(f"{name} type: {type(tensor)}\n")
             f.write(f"{name} value: {tensor}\n")
 
+def small_net_arch(obs_dim):
+    if obs_dim < 16:
+        return dict(pi=[64, 64], qf=[128, 128])
+    else:
+        return dict(pi=[256, 256], qf=[512, 512])
+
 def train_and_evaluate(env_id, config):
     # Initialize variables to avoid reference errors
     features_extractor_class = None
@@ -163,18 +169,23 @@ def train_and_evaluate(env_id, config):
             batch_size = 256
             
             # Only apply custom feature extractor settings when not using Baseline
+            obs_dim = env.observation_space.shape[0]
             if config != "Baseline":
-                policy_kwargs = dict(
-                    features_extractor_class=features_extractor_class,
-                    features_extractor_kwargs=extractor_kwargs,
-                    net_arch=dict(pi=[256, 256], qf=[512, 512])
+                features_extractor = SafeFeaturesExtractor(features_extractor_class, observation_space=env.observation_space, **extractor_kwargs)
+                merged_policy_kwargs = dict(
+                    features_extractor_class=SafeFeaturesExtractor,
+                    features_extractor_kwargs=dict(
+                        extractor_cls=features_extractor_class,
+                        observation_space=env.observation_space,
+                        **extractor_kwargs
+                    ),
+                    net_arch=small_net_arch(obs_dim)
                 )
             else:
-                policy_kwargs = dict(
-                    net_arch=dict(pi=[256, 256], qf=[512, 512])
+                merged_policy_kwargs = dict(
+                    net_arch=small_net_arch(obs_dim)
                 )
             
-            obs_dim = env.observation_space.shape[0]
             print(f"Environment Observation Dimension: {obs_dim}")
             print(f"Using Custom Feature Extractor: {config}")
                 
@@ -269,7 +280,6 @@ def train_and_evaluate(env_id, config):
                     batch_size=hyperparams["batch_size"],
                     learning_starts=hyperparams["learning_starts"],
                     ent_coef=hyperparams.get("ent_coef", "auto"),
-                    target_entropy=hyperparams.get("target_entropy", None),
                     train_freq=hyperparams["train_freq"],
                     gradient_steps=hyperparams["gradient_steps"],
                     policy_kwargs=merged_policy_kwargs,

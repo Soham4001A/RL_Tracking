@@ -407,6 +407,17 @@ class LMAFeaturesExtractor(BaseFeaturesExtractor):
         features = self.flatten(z)
         return features
 
+# 1. Safe feature extractor wrapper
+class SafeFeaturesExtractor(BaseFeaturesExtractor):
+    def __init__(self, extractor_cls, *args, **kwargs):
+        super().__init__(kwargs['observation_space'], features_dim=kwargs.get('features_dim', 1))
+        self.extractor = extractor_cls(*args, **kwargs)
+    def forward(self, obs):
+        x = self.extractor(obs)
+        if x.numel() == 0:
+            raise RuntimeError("Extractor produced 0-dim features")
+        return x
+
 class RewardLoggerCallback(BaseCallback):
     def __init__(self, verbose=0):
         super(RewardLoggerCallback, self).__init__(verbose)
