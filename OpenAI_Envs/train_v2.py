@@ -43,41 +43,63 @@ def get_env_hyperparams(env_id):
     if env_id == "BipedalWalker-v3":
         return {
             "total_timesteps": 2_000_000,
-            "learning_rate": 3e-4,
+            "learning_rate": 1e-4,  # Reduced from 3e-4
             "buffer_size": 1_000_000,
-            "batch_size": 256,
+            "batch_size": 1024,     # Increased from 256
             "gamma": 0.99,
             "tau": 0.005,
             "ent_coef": "auto",
+            "target_entropy": -4,    # More negative = less exploration
             "train_freq": 1,
-            "gradient_steps": 1,
-            "learning_starts": 10000
+            "gradient_steps": 8,     # Increased from 1
+            "learning_starts": 25000, # Increased warmup
+            "use_sde": True,        # State-Dependent Exploration
+            "policy_kwargs": {
+                "log_std_init": -3,  # More conservative initial exploration
+                "net_arch": dict(pi=[400, 300], qf=[400, 300])
+            }
         }
     elif env_id == "MountainCarContinuous-v0":
         return {
             "total_timesteps": 500_000,
-            "learning_rate": 3e-4,
+            "learning_rate": 7e-5,
             "buffer_size": 100_000,
-            "batch_size": 256,
-            "gamma": 0.99,
+            "batch_size": 512,
+            "gamma": 0.999,         # Increased for sparse rewards
             "tau": 0.005,
             "ent_coef": "auto",
+            "target_entropy": -1,   # Less negative for more exploration
             "train_freq": 1,
-            "gradient_steps": 1,
-            "learning_starts": 1000
+            "gradient_steps": 8,    # Increased for better value learning
+            "learning_starts": 5000,
+            "use_sde": True,
+            "sde_sample_freq": 4,   # More frequent SDE sampling
+            "policy_kwargs": {
+                "log_std_init": -2, # Less conservative for more initial exploration
+                "net_arch": dict(pi=[400, 300], qf=[400, 300]),  # Wider networks
+                "use_expln": True   # Use better bounded exploration
+            }
         }
     else:  # Pendulum-v1
         return {
             "total_timesteps": 1_000_000,
-            "learning_rate": 3e-4,
-            "buffer_size": 100_000,
-            "batch_size": 256,
-            "gamma": 0.99,
-            "tau": 0.005,
+            "learning_rate": 1e-4,        # Reduced for stability
+            "buffer_size": 200_000,       # Increased buffer size
+            "batch_size": 512,            # Increased batch size
+            "gamma": 0.98,                # Slightly reduced for faster learning
+            "tau": 0.01,                  # Increased for faster target update
             "ent_coef": "auto",
+            "target_entropy": -2,         # Good balance for Pendulum
             "train_freq": 1,
-            "gradient_steps": 1,
-            "learning_starts": 1000
+            "gradient_steps": 8,          # More gradient steps per sample
+            "learning_starts": 10000,     # Longer warmup
+            "use_sde": True,              # State-dependent exploration
+            "sde_sample_freq": 8,         # SDE sampling frequency
+            "policy_kwargs": {
+                "log_std_init": -2,       # Less conservative exploration
+                "net_arch": dict(pi=[400, 300], qf=[400, 300]),  # Wider networks
+                "use_expln": True         # Better bounded exploration
+            }
         }
 
 def debug_tensor(tensor, name):
@@ -240,7 +262,15 @@ def train_and_evaluate(env_id, config):
                            buffer_size=hyperparams["buffer_size"],
                            batch_size=hyperparams["batch_size"],
                            learning_starts=hyperparams["learning_starts"],
-                           policy_kwargs=policy_kwargs, 
+                           gamma=hyperparams.get("gamma", 0.99),
+                           tau=hyperparams.get("tau", 0.005),
+                           ent_coef=hyperparams.get("ent_coef", "auto"),
+                           target_entropy=hyperparams.get("target_entropy", None),
+                           train_freq=hyperparams.get("train_freq", 1),
+                           gradient_steps=hyperparams.get("gradient_steps", 1),
+                           use_sde=hyperparams.get("use_sde", False),
+                           max_grad_norm=0.5,  # Add gradient clipping
+                           policy_kwargs=hyperparams.get("policy_kwargs", policy_kwargs),
                            tensorboard_log="./TensorBoardLogs", 
                            verbose=1)
                 with open("debug.log", "a") as f:
