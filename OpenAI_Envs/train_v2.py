@@ -175,6 +175,8 @@ def train_and_evaluate(env_id, config):
             eval_env = gym.make(env_id)
             episode_rewards = []
             for ep in range(eval_episodes):
+                with open("results.log", "a") as f:
+                    f.write(f"Starting evaluation episode {ep} for {env_id} with {config}\n")
                 try:
                     obs, _ = eval_env.reset()
                     done = False
@@ -182,12 +184,19 @@ def train_and_evaluate(env_id, config):
                     while not done:
                         try:
                             action, _ = model.predict(obs, deterministic=True)
+                            if ep == 0:
+                                with open("results.log", "a") as f:
+                                    f.write(f"model.predict(obs) -> action: {action}, type: {type(action)}\n")
                         except Exception as e:
                             with open("results.log", "a") as f:
                                 f.write(f"Error during model.predict in episode {ep}: {e}\n")
                             break
                         try:
-                            obs, reward, term, trunc, _ = eval_env.step(action)
+                            step_result = eval_env.step(action)
+                            if ep == 0:
+                                with open("results.log", "a") as f:
+                                    f.write(f"env.step(action) -> {step_result}, types: {[type(x) for x in step_result]}\n")
+                            obs, reward, term, trunc, _ = step_result
                         except Exception as e:
                             with open("results.log", "a") as f:
                                 f.write(f"Error during env.step in episode {ep}: {e}\n")
@@ -200,6 +209,8 @@ def train_and_evaluate(env_id, config):
                         done = bool(term or trunc)
                     else:
                         episode_rewards.append(total_reward)
+                        with open("results.log", "a") as f:
+                            f.write(f"Completed evaluation episode {ep} with total_reward {total_reward}\n")
                 except Exception as e:
                     with open("results.log", "a") as f:
                         f.write(f"Error during evaluation episode {ep}: {e}\n")
