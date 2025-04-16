@@ -35,14 +35,14 @@ env_names = [
 
 config_names = ["Baseline", "MHA", "LMA", "MHA_Lite"]
 
-total_timesteps = 1_000_000  # Increased from 300k to 1M
+total_timesteps = 300_000  # Increased from 300k to 1M
 eval_episodes = 100         # Number of episodes for evaluation
 results = {}
 
 def get_env_hyperparams(env_id):
     if env_id == "BipedalWalker-v3":
         return {
-            "total_timesteps": 2_000_000,
+            "total_timesteps": 300_000,
             "learning_rate": 1e-4,
             "buffer_size": 1_000_000,
             "batch_size": 1024,
@@ -55,7 +55,7 @@ def get_env_hyperparams(env_id):
         }
     elif env_id == "MountainCarContinuous-v0":
         return {
-            "total_timesteps": 500_000,
+            "total_timesteps": 300_000,
             "learning_rate": 7e-5,
             "buffer_size": 100_000,
             "batch_size": 512,
@@ -68,7 +68,7 @@ def get_env_hyperparams(env_id):
         }
     elif env_id == "Pendulum-v1":  # Pendulum-v1
         return {
-            "total_timesteps": 1_000_000,
+            "total_timesteps": 300_000,
             "learning_rate": 1e-4,
             "buffer_size": 200_000,
             "batch_size": 512,
