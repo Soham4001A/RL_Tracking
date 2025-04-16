@@ -294,9 +294,7 @@ def train_and_evaluate(env_id, config):
                 raise e
             
             print(f"Starting training for {env_id} with {config}...")
-            model.learn(total_timesteps=hyperparams["total_timesteps"], 
-                       progress_bar=True, gradient_steps = 64, 
-                       log_interval=100)  # Added log_interval
+            model.learn(total_timesteps=hyperparams["total_timesteps"], progress_bar=True, log_interval=100)
             print(f"Finished training {env_id} with {config}")
 
             # Evaluation
