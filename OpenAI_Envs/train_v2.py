@@ -42,38 +42,41 @@ def get_env_hyperparams(env_id):
     if env_id == "BipedalWalker-v3":
         return {
             "total_timesteps": 2_000_000,
-            "learning_rate": 1e-4,  # Reduced from 3e-4
-            "buffer_size": 2_000_000,
-            "batch_size": 512,      # Increased from 256
+            "learning_rate": 3e-4,
+            "buffer_size": 1_000_000,
+            "batch_size": 256,
             "gamma": 0.99,
             "tau": 0.005,
-            "ent_coef": "auto",     # Using automatic entropy tuning
-            "target_entropy": -3,    # Target entropy for BipedalWalker
-            "learning_starts": 25000 # Increased learning starts
+            "ent_coef": "auto",
+            "train_freq": 1,
+            "gradient_steps": 1,
+            "learning_starts": 10000
         }
     elif env_id == "MountainCarContinuous-v0":
         return {
             "total_timesteps": 500_000,
             "learning_rate": 3e-4,
-            "buffer_size": 500_000,
+            "buffer_size": 100_000,
             "batch_size": 256,
-            "gamma": 0.999,
+            "gamma": 0.99,
             "tau": 0.005,
             "ent_coef": "auto",
-            "target_entropy": -2
+            "train_freq": 1,
+            "gradient_steps": 1,
+            "learning_starts": 1000
         }
     else:  # Pendulum-v1
         return {
             "total_timesteps": 1_000_000,
-            "learning_rate": 7e-5,   # Further reduced for stability
-            "buffer_size": 1_000_000,
-            "batch_size": 512,       # Increased batch size
+            "learning_rate": 3e-4,
+            "buffer_size": 100_000,
+            "batch_size": 256,
             "gamma": 0.99,
-            "tau": 0.01,            # Slightly increased for faster target update
-            "ent_coef": "auto",     # Using automatic entropy tuning
-            "target_entropy": -2,    # Target entropy for Pendulum
-            "train_freq": (1, "episode"),  # Update every episode
-            "gradient_steps": -1     # Update as many times as possible
+            "tau": 0.005,
+            "ent_coef": "auto",
+            "train_freq": 1,
+            "gradient_steps": 1,
+            "learning_starts": 1000
         }
 
 def train_and_evaluate(env_id, config):
