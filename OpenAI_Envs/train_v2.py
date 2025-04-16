@@ -6,360 +6,151 @@ import numpy as np
 from stable_baselines3 import SAC
 from stable_baselines3.common.env_util import make_vec_env
 import torch as th
-import torch.nn as nn
-import torch.nn.functional as F
 import warnings
-from classes import *
+from classes import *  # custom extractors
 from tqdm_utils import suppress_tqdm_cleanup
 
 warnings.filterwarnings("ignore")
 
-# Patch for numpy.bool8 and numpy.float_ deprecation
-if not hasattr(np, 'bool8'):
+# -----------------------------------------------------------------------------
+# 0.  numpy compat shim
+# -----------------------------------------------------------------------------
+if not hasattr(np, "bool8"):
     np.bool8 = np.bool_
-if not hasattr(np, 'float_'):
+if not hasattr(np, "float_"):
     np.float_ = np.float64
 
-# List of environments (only continuous action spaces for SAC)
-env_names = [
-    "BipedalWalker-v3",           # Continuous action space
-    "MountainCarContinuous-v0",   # Continuous action space
-    "Pendulum-v1",                # Continuous action space
-]
+# -----------------------------------------------------------------------------
+# 1.  Table‑specific hyper‑params (A = quick, B = full)
+# -----------------------------------------------------------------------------
+TABLE_A = {
+    "Pendulum-v1": {
+        "total_steps": 300_000,
+        "n_envs": 8,
+        "batch": 64,
+        "grad_steps": 8,
+        "lr": 1e-3,
+        "tau": 0.02,
+        "net_arch": dict(pi=[32, 32], qf=[32, 32]),
+        "buffer": 100_000,
+    },
+    "MountainCarContinuous-v0": {
+        "total_steps": 300_000,
+        "n_envs": 8,
+        "batch": 64,
+        "grad_steps": 8,
+        "lr": 1e-3,
+        "tau": 0.02,
+        "net_arch": dict(pi=[32, 32], qf=[32, 32]),
+        "buffer": 100_000,
+    },
+    "BipedalWalker-v3": {
+        "total_steps": 600_000,
+        "n_envs": 8,
+        "batch": 128,
+        "grad_steps": 8,
+        "lr": 3e-4,
+        "tau": 0.02,
+        "net_arch": dict(pi=[64, 64], qf=[128, 128]),
+        "buffer": 1_000_000,
+    },
+}
 
-# --- Get Model Choice ---
-# Added "Baseline" option
-#config = input("Which Model (Baseline/MHA/LMA/MHA_Lite)? ")
-#if config not in ["Baseline", "MHA", "LMA", "MHA_Lite"]:
-#    raise ValueError("Invalid Model choice. Please enter 'Baseline', 'MHA', 'LMA' or 'MHA_Lite.")
+TABLE_B = {
+    env: {
+        "total_steps": 2_000_000 if env != "MountainCarContinuous-v0" else 1_000_000,
+        "n_envs": 64,
+        "batch": 1_024,
+        "grad_steps": 64,
+        "lr": 3e-4,
+        "tau": 0.005,
+        "net_arch": dict(pi=[128, 128], qf=[256, 256]),
+        "buffer": 1_000_000,
+    }
+    for env in ["Pendulum-v1", "MountainCarContinuous-v0", "BipedalWalker-v3"]
+}
 
-config_names = ["Baseline", "MHA", "LMA", "MHA_Lite"]
+# -----------------------------------------------------------------------------
+# 2.  Safe wrapper for any extractor
+# -----------------------------------------------------------------------------
+class SafeFeaturesExtractor(BaseFeaturesExtractor):
+    def __init__(self, extractor_cls, *args, **kwargs):
+        self.inner = extractor_cls(*args, **kwargs)
+        super().__init__(self.inner.observation_space, self.inner.features_dim)
 
-total_timesteps = 300_000  # Increased from 300k to 1M
-eval_episodes = 100         # Number of episodes for evaluation
-results = {}
+    def forward(self, obs):
+        x = self.inner(obs)
+        if x.numel() == 0:
+            raise RuntimeError("Extractor produced 0‑dim features")
+        return x
 
-def get_env_hyperparams(env_id):
-    if env_id == "BipedalWalker-v3":
-        return {
-            "total_timesteps": 300_000,
-            "learning_rate": 1e-4,
-            "buffer_size": 1_000_000,
-            "batch_size": 1024,
-            "learning_starts": 25000,
-            "ent_coef": "auto",
-            "target_entropy": -4,
-            "policy_kwargs": {
-                "net_arch": dict(pi=[400, 300], qf=[400*2, 300*2])
-            }
-        }
-    elif env_id == "MountainCarContinuous-v0":
-        return {
-            "total_timesteps": 300_000,
-            "learning_rate": 7e-5,
-            "buffer_size": 100_000,
-            "batch_size": 512,
-            "learning_starts": 5000,
-            "ent_coef": "auto",
-            "target_entropy": -1,
-            "policy_kwargs": {
-                "net_arch": dict(pi=[400, 300], qf=[400*2, 300*2])
-            }
-        }
-    elif env_id == "Pendulum-v1":  # Pendulum-v1
-        return {
-            "total_timesteps": 300_000,
-            "learning_rate": 1e-4,
-            "buffer_size": 200_000,
-            "batch_size": 512,
-            "learning_starts": 10000,
-            "ent_coef": "auto",
-            "target_entropy": -2,
-            "policy_kwargs": {
-                "net_arch": dict(pi=[400, 300], qf=[400*2, 300*2])
-            }
-        }
+# -----------------------------------------------------------------------------
+# 3.  Run one (env, extractor) experiment
+# -----------------------------------------------------------------------------
 
-def debug_tensor(tensor, name):
-    with open("debug.log", "a") as f:
-        if isinstance(tensor, torch.Tensor):
-            f.write(f"{name} shape: {tensor.shape}, dtype: {tensor.dtype}\n")
-            f.write(f"{name} values: {tensor}\n")
-        elif isinstance(tensor, np.ndarray):
-            f.write(f"{name} shape: {tensor.shape}, dtype: {tensor.dtype}\n")
-            f.write(f"{name} values: {tensor}\n")
-        else:
-            f.write(f"{name} type: {type(tensor)}\n")
-            f.write(f"{name} value: {tensor}\n")
+def run(env_id: str, table_cfg: dict, extractor_mode: str):
+    cfg = table_cfg[env_id]
+    env = make_vec_env(env_id, n_envs=cfg["n_envs"])
+    obs_dim = env.observation_space.shape[0]
 
-def small_net_arch(obs_dim):
-    if obs_dim < 16:
-        return dict(pi=[64, 64], qf=[128, 128])
-    else:
-        return dict(pi=[256, 256], qf=[512, 512])
+    # -------- feature extractor --------
+    feat_cls, feat_kwargs = None, {}
+    if extractor_mode != "Baseline":
+        embed = max(32, obs_dim * 4)
+        heads = 2 if obs_dim < 8 else 4
+        layers = 2 if obs_dim < 8 else 4
+        if extractor_mode == "MHA":
+            feat_cls, feat_kwargs = MHAFeaturesExtractor, dict(embed_dim=embed, num_heads=heads, ff_hidden=embed*4, num_layers=layers, dropout=0.05, seq_len=obs_dim)
+        elif extractor_mode == "LMA":
+            feat_cls, feat_kwargs = LMAFeaturesExtractor, dict(embed_dim=embed, num_heads_stacking=heads, target_l_new=obs_dim//2, d_new=embed//2, num_heads_latent=heads, ff_latent_hidden=embed*2, num_lma_layers=layers, dropout=0.05, bias=True, seq_len=obs_dim)
+        elif extractor_mode == "MHA_Lite":
+            feat_cls, feat_kwargs = MHAFeaturesExtractor, dict(embed_dim=embed//2, num_heads=heads, ff_hidden=(embed//2)*4, num_layers=layers, dropout=0.05, seq_len=obs_dim)
 
-def big_net_arch(obs_dim):
-    return dict(pi=[2048, 2048], qf=[2048, 2048])
+    policy_kwargs = dict(net_arch=cfg["net_arch"])
+    if feat_cls:
+        policy_kwargs.update(features_extractor_class=SafeFeaturesExtractor, features_extractor_kwargs=dict(extractor_cls=feat_cls, observation_space=env.observation_space, **feat_kwargs))
 
-def train_and_evaluate(env_id, config):
-    # Initialize variables to avoid reference errors
-    features_extractor_class = None
-    extractor_kwargs = {}
-    # Move env creation to the top so it is always defined before use
-    n_envs = 128
-    env = make_vec_env(env_id, n_envs=n_envs)
-    with suppress_tqdm_cleanup():
-        try:
-            # --- Define Feature Extractor and Policy Kwargs ---
-            policy_kwargs = None
-            
-            if env_id == "CartPole-v1":
-                config_seq_len = 4
-            elif env_id == "Acrobot-v1":
-                config_seq_len = 6
-            elif env_id == "BipedalWalker-v3":
-                config_seq_len = 24
-            elif env_id == "MountainCarContinuous-v0":
-                config_seq_len = 2
-            elif env_id == "Pendulum-v1":
-                config_seq_len = 3
-            
-            if config != "Baseline":
-                target_seq_len = -1
-                features_extractor_class = None
-                extractor_kwargs = {}
+    model = SAC(
+        "MlpPolicy",
+        env,
+        learning_rate=cfg["lr"],
+        buffer_size=cfg["buffer"],
+        batch_size=cfg["batch"],
+        learning_starts=cfg["batch"] * 4,
+        ent_coef="auto",
+        tau=cfg["tau"],
+        train_freq=(1, "step"),
+        gradient_steps=cfg["grad_steps"],
+        policy_kwargs=policy_kwargs,
+        device="cuda" if th.cuda.is_available() else "cpu",
+        verbose=0,
+    )
 
-                # Dynamically set extractor_kwargs based on env observation space
-                ENV_DIM = env.observation_space.shape[0]
-                EMBED = max(32, ENV_DIM * 4)
-                HEADS = 2 if ENV_DIM < 8 else 4
-                LAYERS = 2 if ENV_DIM < 8 else 4
-                extractor_kwargs = dict(
-                    embed_dim=EMBED,
-                    num_heads=HEADS,
-                    ff_hidden=EMBED * 4,
-                    num_layers=LAYERS,
-                    dropout=0.05,
-                    seq_len=ENV_DIM,
-                )
-                # ...existing code for config == 'MHA' or 'MHA_Lite'...
-                if config == "MHA":
-                    features_extractor_class = MHAFeaturesExtractor
-                    # extractor_kwargs already set above
-                elif config == "LMA":
-                    features_extractor_class = LMAFeaturesExtractor
-                    target_seq = ENV_DIM // 2
-                    extractor_kwargs = dict(
-                        embed_dim=EMBED,
-                        num_heads_stacking=HEADS,
-                        target_l_new=target_seq,
-                        d_new=EMBED // 2,
-                        num_heads_latent=HEADS,
-                        ff_latent_hidden=EMBED * 2,
-                        num_lma_layers=LAYERS,
-                        dropout=0.05,
-                        bias=True,
-                        seq_len=ENV_DIM,
-                    )
-                elif config == "MHA_Lite":
-                    features_extractor_class = MHAFeaturesExtractor
-                    # extractor_kwargs already set above
-                    
-            # Increase number of parallel environments for better GPU utilization
-            # Set rollout and gradient step parameters for max throughput
-            train_freq = (1, 'step')
-            gradient_steps = 128
-            batch_size = 4096
-            
-            # Only apply custom feature extractor settings when not using Baseline
-            obs_dim = env.observation_space.shape[0]
-            if config != "Baseline":
-                features_extractor = SafeFeaturesExtractor(features_extractor_class, observation_space=env.observation_space, **extractor_kwargs)
-                merged_policy_kwargs = dict(
-                    features_extractor_class=SafeFeaturesExtractor,
-                    features_extractor_kwargs=dict(
-                        extractor_cls=features_extractor_class,
-                        observation_space=env.observation_space,
-                        **extractor_kwargs
-                    ),
-                    net_arch=big_net_arch(obs_dim)
-                )
-            else:
-                merged_policy_kwargs = dict(
-                    net_arch=big_net_arch(obs_dim)
-                )
-            
-            print(f"Environment Observation Dimension: {obs_dim}")
-            print(f"Using Custom Feature Extractor: {config}")
-                
-            # Get environment-specific hyperparameters
-            hyperparams = get_env_hyperparams(env_id)
-            hyperparams.pop("target_entropy", None)
-            
-            # Update hyperparams for rollout/gradient steps and batch size
-            hyperparams["train_freq"] = train_freq
-            hyperparams["gradient_steps"] = gradient_steps
-            hyperparams["batch_size"] = batch_size
-            
-            if features_extractor_class:
-                with open("debug.log", "a") as f:
-                    f.write(f"\nTesting feature extractor for {env_id} with {config}\n")
-                # Test feature extractor
-                dummy_obs = env.observation_space.sample()
-                dummy_obs_tensor = th.as_tensor(dummy_obs).float()
-                extractor = features_extractor_class(
-                    observation_space=env.observation_space,
-                    **extractor_kwargs
-                )
-                features = extractor(dummy_obs_tensor)
-                debug_tensor(features, "Feature extractor output")
+    model.learn(total_timesteps=cfg["total_steps"], progress_bar=True)
 
-            # Verify policy_kwargs before model creation
-            with open("debug.log", "a") as f:
-                f.write(f"\nPolicy kwargs for {env_id} with {config}:\n{policy_kwargs}\n")
+    # deterministic eval
+    eval_env = gym.make(env_id)
+    rets = []
+    for _ in range(50):
+        done, ep_ret = False, 0.0
+        obs, _ = eval_env.reset()
+        while not done:
+            act, _ = model.predict(obs, deterministic=True)
+            obs, reward, term, trunc, _ = eval_env.step(act)
+            ep_ret += reward
+            done = term or trunc
+        rets.append(ep_ret)
+    mean, std = float(np.mean(rets)), float(np.std(rets))
+    print(f"{env_id:<28} | {extractor_mode:<8} | {mean:8.2f} ± {std:6.2f}")
 
-            # Handle batched observations for feature extractors
-            if features_extractor_class:
-                dummy_batch = env.observation_space.sample()
-                if len(dummy_batch.shape) == 1:  # Single observation
-                    dummy_batch = np.stack([dummy_batch] * env.num_envs)
-                dummy_batch_tensor = th.as_tensor(dummy_batch).float()
-                try:
-                    extractor = features_extractor_class(
-                        observation_space=env.observation_space,
-                        **extractor_kwargs
-                    )
-                    features = extractor(dummy_batch_tensor)
-                    if features is None or features.shape[-1] == 0:
-                        raise ValueError(f"Feature extractor returned invalid output shape: {features.shape if features is not None else None}")
-                    with open("debug.log", "a") as f:
-                        f.write(f"\nFeature extractor validation successful. Output shape: {features.shape}\n")
-                except Exception as e:
-                    with open("debug.log", "a") as f:
-                        f.write(f"\nFeature extractor validation failed: {str(e)}\n")
-                    raise e
-                with open("debug.log", "a") as f:
-                    f.write(f"\nTesting feature extractor with batched input:\n")
-                    f.write(f"Input shape: {dummy_batch_tensor.shape}\n")
-                features = extractor(dummy_batch_tensor)
-                debug_tensor(features, "Batched feature extractor output")
+# -----------------------------------------------------------------------------
+# 4.  entry‑point
+# -----------------------------------------------------------------------------
+if __name__ == "__main__":
+    mode = input("Select table (A=quick / B=full) [A]: ").strip().lower() or "a"
+    assert mode in ("a", "b"), "Please type 'A' or 'B'"
+    table = TABLE_A if mode == "a" else TABLE_B
 
-            # Test feature extractor with sample input
-            if features_extractor_class:
-                with open("debug.log", "a") as f:
-                    f.write(f"\nInput dimensions for {env_id}:\n")
-                    f.write(f"Observation space shape: {env.observation_space.shape}\n")
-                    f.write(f"Config seq_len: {config_seq_len}\n")
-                
-                # Create test batch
-                obs = env.observation_space.sample()
-                obs_batch = np.stack([obs] * 2)  # Create a mini-batch of size 2
-                obs_tensor = th.as_tensor(obs_batch).float()
-                
-                # Test feature extractor
-                extractor = features_extractor_class(
-                    observation_space=env.observation_space,
-                    **extractor_kwargs
-                )
-                with open("debug.log", "a") as f:
-                    f.write(f"Testing with batch input shape: {obs_tensor.shape}\n")
-                features = extractor(obs_tensor)
-                with open("debug.log", "a") as f:
-                    f.write(f"Feature extractor output shape: {features.shape}\n")
-
-            # Merge policy_kwargs from hyperparams and custom extractor, avoiding duplicate net_arch
-            merged_policy_kwargs = hyperparams.get("policy_kwargs", {}).copy()
-            if config != "Baseline":
-                merged_policy_kwargs["features_extractor_class"] = features_extractor_class
-                merged_policy_kwargs["features_extractor_kwargs"] = extractor_kwargs
-
-            # Create SAC model
-            try:
-                model = SAC(
-                    "MlpPolicy",
-                    env,
-                    learning_rate=hyperparams["learning_rate"],
-                    buffer_size=hyperparams["buffer_size"],
-                    batch_size=hyperparams["batch_size"],
-                    learning_starts=hyperparams["learning_starts"],
-                    ent_coef=hyperparams.get("ent_coef", "auto"),
-                    train_freq=hyperparams["train_freq"],
-                    gradient_steps=hyperparams["gradient_steps"],
-                    policy_kwargs=merged_policy_kwargs,
-                    tensorboard_log="./TensorBoardLogs",
-                    verbose=1
-                )
-                with open("debug.log", "a") as f:
-                    f.write(f"\nModel created successfully for {env_id} with {config}\n")
-            except Exception as e:
-                with open("debug.log", "a") as f:
-                    f.write(f"\nError creating model: {str(e)}\n")
-                raise e
-            
-            print(f"Starting training for {env_id} with {config}...")
-            model.learn(total_timesteps=hyperparams["total_timesteps"], progress_bar=True, log_interval=100)
-            print(f"Finished training {env_id} with {config}")
-
-            # Evaluation
-            eval_env = gym.make(env_id)
-            episode_rewards = []
-            for ep in range(eval_episodes):
-                with open("results.log", "a") as f:
-                    f.write(f"Starting evaluation episode {ep} for {env_id} with {config}\n")
-                try:
-                    obs, _ = eval_env.reset()
-                    with open("debug.log", "a") as f:
-                        f.write(f"\nEpisode {ep} initial observation:\n")
-                    debug_tensor(obs, "Initial observation")
-                    
-                    done = False
-                    total_reward = 0
-                    while not done:
-                        try:
-                            # Convert observation to tensor and debug
-                            obs_tensor = th.as_tensor(obs).float()
-                            debug_tensor(obs_tensor, "Model input")
-                            
-                            action, _ = model.predict(obs, deterministic=True)
-                            debug_tensor(action, "Model output action")
-                            
-                            obs, reward, term, trunc, _ = eval_env.step(action)
-                            debug_tensor(reward, "Environment reward")
-                            
-                            if reward is None:
-                                with open("debug.log", "a") as f:
-                                    f.write("Warning: Received None reward\n")
-                                continue
-                                
-                            total_reward += reward
-                            done = bool(term or trunc)
-                            
-                        except Exception as e:
-                            with open("debug.log", "a") as f:
-                                f.write(f"Error in episode step: {str(e)}\n")
-                            break
-                            
-                    episode_rewards.append(total_reward)
-                    
-                except Exception as e:
-                    with open("debug.log", "a") as f:
-                        f.write(f"Error in episode {ep}: {str(e)}\n")
-                    
-            if len(episode_rewards) == 0:
-                results[env_id] = {'mean': 'Error: No episodes completed during evaluation', 'std': None}
-            else:
-                avg_reward = float(np.mean(episode_rewards))
-                std_reward = float(np.std(episode_rewards))
-                results[env_id] = {'mean': avg_reward, 'std': std_reward}
-        except Exception as e:
-            results[env_id] = {'mean': f"Error: {e}", 'std': None}
-
-# Run
-for env in env_names:
-    for config in config_names:
-        print(f"\n--- Training and Evaluating {env} with {config} ---")
-        train_and_evaluate(env,config)
-        # Log results for this (env, config) pair
-        with open("results.log", "a") as f:
-            f.write(f"Results for {env} with {config}: {results[env]}")
-            f.write(f"{env} ({config}): Mean = {results[env]['mean']}, Std = {results[env]['std']}\n")
+    for env in table.keys():
+        for extractor in ["Baseline", "MHA", "LMA", "MHA_Lite"]:
+            run(env, table, extractor)
