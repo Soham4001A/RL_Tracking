@@ -11,7 +11,7 @@ from simulation import PPOEnv # Import the PPOEnv class from the classes module
 import globals # Import globals to set flags
 
 # --- Visualization Parameters ---
-NUM_CCA = 4 # **** UPDATED TO 4 ****
+NUM_CCA = 8 # **** UPDATED TO 4 ****
 STEPS = 10000 # Number of steps to visualize (adjust as needed)
 GRID_SIZE = globals.grid_size # Get grid size from globals
 

@@ -14,7 +14,7 @@ import globals  # Import globals to set flags
 STEPS = 10000  # Number of steps to visualize (adjust as needed)
 STEP_SIZE = globals.step_size
 GRID_SIZE = globals.grid_size  # Get grid size from globals
-NUM_CCA = 2
+NUM_CCA = 4
 HISTORY_LEN = 10
 FORMATION_SCALE = 40.0
 

@@ -13,6 +13,9 @@ import time
 import random # For curriculum selection
 from classes import *
 
+# CURRENTLY A BUG - ALL ACTIONS ARE THE SAME???
+
+
 # Internal Module Imports - Assumes classes.py is updated
 try:
     # Import necessary classes - LMAFeaturesExtractor, Transformer, CCA, Foxtrot
@@ -306,7 +309,7 @@ class PPOSwarmCurriculumEnv(gym.Env):
         beta = 0.05              # Weight for energy efficiency
         gamma_collision = -2000.0  # Penalty for collisions
         gamma = 0.1              # Potential shaping weight
-        capture_radius = 15.0    # Radius for capture bonus
+        capture_radius = 50.0    # Radius for capture bonus
         
         target_positions = current_foxtrot_pos + self.target_formation_offsets
         
@@ -437,10 +440,10 @@ if __name__ == "__main__":
         FeatureExtractor = LMAFeaturesExtractor
         # Use user's specific LMA kwargs
         kwargs = dict(
-            seq_len=HISTORY_LEN, embed_dim=512, num_heads_stacking=16,
+            seq_len=HISTORY_LEN, embed_dim=1024, num_heads_stacking=32,
             target_l_new=int(HISTORY_LEN/2), # Ensure integer division if needed
-            d_new=256, num_heads_latent=16, ff_latent_hidden=256*6,
-            num_lma_layers=6, dropout=0.1, bias=True
+            d_new=512, num_heads_latent=32, ff_latent_hidden=512*6,
+            num_lma_layers=6, dropout=0.2, bias=True
         )
     elif config == "MHA" or config == "MHA_Lite": # Combine MHA/MHA_Lite logic
          print(f"Using {config} configuration (Transformer).")
@@ -469,7 +472,7 @@ if __name__ == "__main__":
     # Use user's PPO hyperparameters
     model = model_class(
         policy="MlpPolicy", policy_kwargs=policy_kwargs, env=vec_env, verbose=1,
-        normalize_advantage=True, learning_rate=linear_schedule(0.0002),
+        normalize_advantage=True, learning_rate=linear_schedule(0.00009),
         n_steps=600, batch_size=100, n_epochs=10,
         gamma=0.9, gae_lambda=0.9, clip_range=0.4,
         ent_coef=0.002, vf_coef=0.85, max_grad_norm=0.5,
@@ -494,7 +497,7 @@ if __name__ == "__main__":
     print("\nStarting Training (Swarm Curriculum)...")
     
     try:
-        model.learn(total_timesteps=300_000)
+        model.learn(total_timesteps=400_000)
         #globals.PROXIMITY_CCA = False
         #model.learn(total_timesteps=100_000) #You should implement ciriculum learning within the enviornment itself
     except KeyboardInterrupt: print("\nTraining interrupted.")

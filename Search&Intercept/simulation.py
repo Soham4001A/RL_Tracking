@@ -1,3 +1,6 @@
+
+# THIS SCENARIO IS CURRENTLY A WORK IN PROGRESS
+
 import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
@@ -48,7 +51,7 @@ class PPOEnv(gym.Env):
         self.history_len = 30
         self.grid_resolution = 25  # For exploration grid cells
         self.current_step = 0
-        self.max_steps = 3600
+        self.max_steps = 800
         self.foxtrot_obj = None
         self.cca_objs = []
         self.visited_cells = set()  # Track visited cells
@@ -231,7 +234,8 @@ class PPOEnv(gym.Env):
             avg_sep = float('inf')
 
         # Use the intercept reward calculation exclusively
-        reward += self._calculate_intercept_reward(actions, distances, min_dist, max_dist, avg_dist, avg_sep)
+        #reward += self._calculate_intercept_reward(actions, distances, min_dist, max_dist, avg_dist, avg_sep)
+        reward += self._intercept_simple_reward(actions, current_cca_positions)
 
         if REWARD_DEBUG:
             debug_str = (f"Focus: INTERCEPT Only | Total Reward: {reward:.2f} | Distances - min: {min_dist:.1f}, "
@@ -264,6 +268,72 @@ class PPOEnv(gym.Env):
 
         return reward
 
+    def _intercept_simple_reward(self, actions,current_cca_positions):
+        """
+        Simplified reward function matching reference with minimal formation adaptation.
+        """
+        # Initialize reward
+        reward = 0.0
+        
+        # Hyperparameters (identical to reference)
+        alpha = 300           # Weight for progress
+        beta = 0.05              # Weight for energy efficiency
+        gamma_collision = -2000.0  # Penalty for collisions
+        gamma = 0.1              # Potential shaping weight
+        capture_radius = 15.0    # Radius for capture bonus
+        
+        target_position = self.foxtrot_obj.position
+                 
+        # Progress-Based Reward (simplified to match reference)
+        total_progress = 0.0
+        for i in range(self.num_cca):
+            # Calculate progress toward target position (simpler)
+            current_distance = np.linalg.norm((current_cca_positions[i]) - (target_position))
+            prev_distance = np.linalg.norm((self.previous_cca_positions[i]) - 
+                                        (target_position))
+            
+            # If the distance increased, we penalize
+            if prev_distance <= current_distance:
+                negative_progress = abs(current_distance - prev_distance)
+                reward -= negative_progress * alpha
+                total_progress -= negative_progress
+            # If the distance decreased, we reward
+            elif prev_distance > current_distance:
+                positive_progress = abs(prev_distance - current_distance)
+                reward += positive_progress * alpha
+                total_progress += positive_progress
+            
+            # Capture bonus (identical to reference)
+            if current_distance < capture_radius:
+                reward += 1000.0
+        
+        # Energy Efficiency Penalty (identical to reference)
+        energy_penalty = beta * np.sum(np.linalg.norm(actions, axis=1))
+        reward -= energy_penalty
+        
+        # Collision Penalty (simplified) #THIS IS BROKEN
+        # collision_penalty = 0.0
+        # if self.num_cca > 1:
+        #     for i in range(self.num_cca):
+        #         for j in range(i + 1, self.num_cca):
+        #             pos_i = np.asarray(current_cca_positions[i])
+        #             pos_j = np.asarray(current_cca_positions[j])
+        #             sep = np.linalg.norm(pos_i - pos_j)
+        #             if sep < self.cca_collision_radius:
+        #                 collision_penalty += gamma_collision
+        
+        # reward += collision_penalty
+        
+        # Clip reward to prevent extreme values (identical to reference)
+        reward = np.clip(reward, float(-2000*self.num_cca), float(2000.0*self.num_cca))
+        
+        # Debug output
+        if REWARD_DEBUG and self.current_step % 1 == 0:
+            distances_str = ", ".join([f"{np.linalg.norm(np.asarray(current_cca_positions[i]) - np.asarray(target_position)):.2f}" for i in range(self.num_cca)])
+            #print(f"Distances to targets: [{distances_str}], Raw Reward: {reward}, Progress Reward: {total_progress}")
+        
+        return float(reward)
+    
     def _calculate_intercept_reward(self, actions, distances, min_dist, max_dist, avg_dist, avg_sep):
         """
         Calculate additional rewards for INTERCEPT mode.
@@ -448,7 +518,7 @@ if __name__ == "__main__":
         features_extractor_class=LMAFeaturesExtractor,
         features_extractor_kwargs=lma_kwargs,
         # Adjust net_arch based on new feature dim (3200) - maybe needs more capacity
-        net_arch=dict(pi=[512, 256, 128], vf=[512, 256, 128, 64]) # Example larger arch
+        net_arch=dict(pi=[512,512, 256, 128], vf=[512, 512, 256, 64]) # Example larger arch
     )
 
     # --- Define PPO Model ---
@@ -462,14 +532,14 @@ if __name__ == "__main__":
         verbose=1,
         normalize_advantage=True,
         learning_rate=linear_schedule(initial_value= 0.0003), # Possibly lower LR for harder task
-        n_steps=4096,             # Increase steps for more data per update
-        batch_size=512,           # Increase batch size
-        n_epochs=5,
-        gamma=0.95,               # Standard discount factor
-        gae_lambda=0.9,           # Standard GAE factor
+        n_steps=800,             # Increase steps for more data per update
+        batch_size=200,           # Increase batch size
+        n_epochs=10,
+        gamma=0.9,               # Standard discount factor
+        gae_lambda=0.85,           # Standard GAE factor
         clip_range=0.2,           # Standard PPO clip range
-        ent_coef=0.003,           # Small entropy encourages exploration slightly
-        vf_coef=0.3,              # Value function coefficient
+        ent_coef=0.002,           # Small entropy encourages exploration slightly
+        vf_coef=0.7,              # Value function coefficient
         max_grad_norm=0.5,
         tensorboard_log= "./TensorBoardLogs/",
         **model_specific_kwargs
