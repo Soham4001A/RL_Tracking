@@ -7,6 +7,7 @@ from stable_baselines3 import SAC
 from stable_baselines3.common.env_util import make_vec_env
 import torch as th
 import torch.nn as nn
+import torch.nn.functional as F
 import warnings
 from classes import *
 from tqdm_utils import suppress_tqdm_cleanup
@@ -79,6 +80,18 @@ def get_env_hyperparams(env_id):
             "learning_starts": 1000
         }
 
+def debug_tensor(tensor, name):
+    with open("debug.log", "a") as f:
+        if isinstance(tensor, torch.Tensor):
+            f.write(f"{name} shape: {tensor.shape}, dtype: {tensor.dtype}\n")
+            f.write(f"{name} values: {tensor}\n")
+        elif isinstance(tensor, np.ndarray):
+            f.write(f"{name} shape: {tensor.shape}, dtype: {tensor.dtype}\n")
+            f.write(f"{name} values: {tensor}\n")
+        else:
+            f.write(f"{name} type: {type(tensor)}\n")
+            f.write(f"{name} value: {tensor}\n")
+
 def train_and_evaluate(env_id, config):
     with suppress_tqdm_cleanup():
         try:
@@ -148,6 +161,19 @@ def train_and_evaluate(env_id, config):
             # Get environment-specific hyperparameters
             hyperparams = get_env_hyperparams(env_id)
             
+            if features_extractor_class:
+                with open("debug.log", "a") as f:
+                    f.write(f"\nTesting feature extractor for {env_id} with {config}\n")
+                # Test feature extractor
+                dummy_obs = env.observation_space.sample()
+                dummy_obs_tensor = th.as_tensor(dummy_obs).float()
+                extractor = features_extractor_class(
+                    observation_space=env.observation_space,
+                    **extractor_kwargs
+                )
+                features = extractor(dummy_obs_tensor)
+                debug_tensor(features, "Feature extractor output")
+
             # Create SAC model with environment-specific hyperparameters
             model = SAC("MlpPolicy", 
                        env, 
@@ -179,41 +205,43 @@ def train_and_evaluate(env_id, config):
                     f.write(f"Starting evaluation episode {ep} for {env_id} with {config}\n")
                 try:
                     obs, _ = eval_env.reset()
+                    with open("debug.log", "a") as f:
+                        f.write(f"\nEpisode {ep} initial observation:\n")
+                    debug_tensor(obs, "Initial observation")
+                    
                     done = False
                     total_reward = 0
                     while not done:
                         try:
+                            # Convert observation to tensor and debug
+                            obs_tensor = th.as_tensor(obs).float()
+                            debug_tensor(obs_tensor, "Model input")
+                            
                             action, _ = model.predict(obs, deterministic=True)
-                            if ep == 0:
-                                with open("results.log", "a") as f:
-                                    f.write(f"model.predict(obs) -> action: {action}, type: {type(action)}\n")
+                            debug_tensor(action, "Model output action")
+                            
+                            obs, reward, term, trunc, _ = eval_env.step(action)
+                            debug_tensor(reward, "Environment reward")
+                            
+                            if reward is None:
+                                with open("debug.log", "a") as f:
+                                    f.write("Warning: Received None reward\n")
+                                continue
+                                
+                            total_reward += reward
+                            done = bool(term or trunc)
+                            
                         except Exception as e:
-                            with open("results.log", "a") as f:
-                                f.write(f"Error during model.predict in episode {ep}: {e}\n")
+                            with open("debug.log", "a") as f:
+                                f.write(f"Error in episode step: {str(e)}\n")
                             break
-                        try:
-                            step_result = eval_env.step(action)
-                            if ep == 0:
-                                with open("results.log", "a") as f:
-                                    f.write(f"env.step(action) -> {step_result}, types: {[type(x) for x in step_result]}\n")
-                            obs, reward, term, trunc, _ = step_result
-                        except Exception as e:
-                            with open("results.log", "a") as f:
-                                f.write(f"Error during env.step in episode {ep}: {e}\n")
-                            break
-                        if reward is None:
-                            with open("results.log", "a") as f:
-                                f.write(f"Reward is None in episode {ep}\n")
-                            break
-                        total_reward += reward
-                        done = bool(term or trunc)
-                    else:
-                        episode_rewards.append(total_reward)
-                        with open("results.log", "a") as f:
-                            f.write(f"Completed evaluation episode {ep} with total_reward {total_reward}\n")
+                            
+                    episode_rewards.append(total_reward)
+                    
                 except Exception as e:
-                    with open("results.log", "a") as f:
-                        f.write(f"Error during evaluation episode {ep}: {e}\n")
+                    with open("debug.log", "a") as f:
+                        f.write(f"Error in episode {ep}: {str(e)}\n")
+                    
             if len(episode_rewards) == 0:
                 results[env_id] = {'mean': 'Error: No episodes completed during evaluation', 'std': None}
             else:
