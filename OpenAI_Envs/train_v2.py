@@ -75,8 +75,9 @@ TABLE_B = {
 # -----------------------------------------------------------------------------
 class SafeFeaturesExtractor(BaseFeaturesExtractor):
     def __init__(self, observation_space, extractor_cls=None, **kwargs):
+        super().__init__(observation_space, features_dim=1)  # temp features_dim, will be overwritten
         self.inner = extractor_cls(observation_space, **kwargs)
-        super().__init__(self.inner.observation_space, self.inner.features_dim)
+        self._features_dim = self.inner.features_dim
 
     def forward(self, obs):
         x = self.inner(obs)
