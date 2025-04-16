@@ -33,7 +33,7 @@ env_names = [
 #if config not in ["Baseline", "MHA", "LMA", "MHA_Lite"]:
 #    raise ValueError("Invalid Model choice. Please enter 'Baseline', 'MHA', 'LMA' or 'MHA_Lite.")
 
-config_names = ["MHA", "LMA", "MHA_Lite"]
+config_names = ["Baseline", "MHA", "LMA", "MHA_Lite"]
 
 total_timesteps = 1_000_000  # Increased from 300k to 1M
 eval_episodes = 100         # Number of episodes for evaluation
@@ -50,7 +50,7 @@ def get_env_hyperparams(env_id):
             "ent_coef": "auto",
             "target_entropy": -4,
             "policy_kwargs": {
-                "net_arch": dict(pi=[400, 300], qf=[400, 300])
+                "net_arch": dict(pi=[400, 300], qf=[400*2, 300*2])
             }
         }
     elif env_id == "MountainCarContinuous-v0":
@@ -63,7 +63,7 @@ def get_env_hyperparams(env_id):
             "ent_coef": "auto",
             "target_entropy": -1,
             "policy_kwargs": {
-                "net_arch": dict(pi=[400, 300], qf=[400, 300])
+                "net_arch": dict(pi=[400, 300], qf=[400*2, 300*2])
             }
         }
     elif env_id == "Pendulum-v1":  # Pendulum-v1
@@ -76,7 +76,7 @@ def get_env_hyperparams(env_id):
             "ent_coef": "auto",
             "target_entropy": -2,
             "policy_kwargs": {
-                "net_arch": dict(pi=[400, 300], qf=[400, 300])
+                "net_arch": dict(pi=[400, 300], qf=[400*2, 300*2])
             }
         }
 
@@ -114,38 +114,50 @@ def train_and_evaluate(env_id, config):
                 features_extractor_class = None
                 extractor_kwargs = {}
 
+                # Dynamically set extractor_kwargs based on env observation space
+                ENV_DIM = env.observation_space.shape[0]
+                EMBED = max(32, ENV_DIM * 4)
+                HEADS = 2 if ENV_DIM < 8 else 4
+                LAYERS = 2 if ENV_DIM < 8 else 4
+                extractor_kwargs = dict(
+                    embed_dim=EMBED,
+                    num_heads=HEADS,
+                    ff_hidden=EMBED * 4,
+                    num_layers=LAYERS,
+                    dropout=0.05,
+                    seq_len=ENV_DIM,
+                )
+                # ...existing code for config == 'MHA' or 'MHA_Lite'...
                 if config == "MHA":
                     features_extractor_class = MHAFeaturesExtractor
-                    # User's desired MHA extractor params
-                    extractor_kwargs = dict(
-                        embed_dim=128, num_heads=4,
-                        ff_hidden=128*4, num_layers=4,
-                        dropout=0.1, seq_len = config_seq_len
-                    )
-
+                    # extractor_kwargs already set above
                 elif config == "LMA":
                     features_extractor_class = LMAFeaturesExtractor
-                    target_seq = config_seq_len/2
-                    if type(target_seq) == float:
-                        target_seq = int(target_seq)
-                    # User's desired LMA extractor params
+                    target_seq = ENV_DIM // 2
                     extractor_kwargs = dict(
-                        embed_dim=128, num_heads_stacking=4, target_l_new=target_seq, d_new=64,
-                        num_heads_latent=4, ff_latent_hidden=64*4, num_lma_layers=4,
-                        dropout=0.1, bias=True, seq_len = config_seq_len
+                        embed_dim=EMBED,
+                        num_heads_stacking=HEADS,
+                        target_l_new=target_seq,
+                        d_new=EMBED // 2,
+                        num_heads_latent=HEADS,
+                        ff_latent_hidden=EMBED * 2,
+                        num_lma_layers=LAYERS,
+                        dropout=0.05,
+                        bias=True,
+                        seq_len=ENV_DIM,
                     )
-
                 elif config == "MHA_Lite":
                     features_extractor_class = MHAFeaturesExtractor
-                    # User's desired MHA_Lite extractor params (using MHA extractor)
-                    extractor_kwargs = dict(
-                        embed_dim=64, num_heads=4,
-                        ff_hidden=64*4, num_layers=4,
-                        dropout=0.1, seq_len = config_seq_len 
-                    )
+                    # extractor_kwargs already set above
                     
             # Increase number of parallel environments for better GPU utilization
-            env = make_vec_env(env_id, n_envs=64)  # Changed from 25 to 64
+            # Set rollout and gradient step parameters
+            n_envs = 16
+            train_freq = (1, 'step')
+            gradient_steps = 16
+            batch_size = 256
+            
+            env = make_vec_env(env_id, n_envs=n_envs)
             
             # Only apply custom feature extractor settings when not using Baseline
             if config != "Baseline":
@@ -165,6 +177,12 @@ def train_and_evaluate(env_id, config):
                 
             # Get environment-specific hyperparameters
             hyperparams = get_env_hyperparams(env_id)
+            hyperparams.pop("target_entropy", None)
+            
+            # Update hyperparams for rollout/gradient steps and batch size
+            hyperparams["train_freq"] = train_freq
+            hyperparams["gradient_steps"] = gradient_steps
+            hyperparams["batch_size"] = batch_size
             
             if features_extractor_class:
                 with open("debug.log", "a") as f:
@@ -240,17 +258,21 @@ def train_and_evaluate(env_id, config):
 
             # Create SAC model
             try:
-                model = SAC("MlpPolicy", 
-                           env, 
-                           learning_rate=hyperparams["learning_rate"],
-                           buffer_size=hyperparams["buffer_size"],
-                           batch_size=hyperparams["batch_size"],
-                           learning_starts=hyperparams["learning_starts"],
-                           ent_coef=hyperparams.get("ent_coef", "auto"),
-                           target_entropy=hyperparams.get("target_entropy", None),
-                           policy_kwargs=merged_policy_kwargs,
-                           tensorboard_log="./TensorBoardLogs", 
-                           verbose=1)
+                model = SAC(
+                    "MlpPolicy",
+                    env,
+                    learning_rate=hyperparams["learning_rate"],
+                    buffer_size=hyperparams["buffer_size"],
+                    batch_size=hyperparams["batch_size"],
+                    learning_starts=hyperparams["learning_starts"],
+                    ent_coef=hyperparams.get("ent_coef", "auto"),
+                    target_entropy=hyperparams.get("target_entropy", None),
+                    train_freq=hyperparams["train_freq"],
+                    gradient_steps=hyperparams["gradient_steps"],
+                    policy_kwargs=merged_policy_kwargs,
+                    tensorboard_log="./TensorBoardLogs",
+                    verbose=1
+                )
                 with open("debug.log", "a") as f:
                     f.write(f"\nModel created successfully for {env_id} with {config}\n")
             except Exception as e:
@@ -260,7 +282,7 @@ def train_and_evaluate(env_id, config):
             
             print(f"Starting training for {env_id} with {config}...")
             model.learn(total_timesteps=hyperparams["total_timesteps"], 
-                       progress_bar=True, 
+                       progress_bar=True, gradient_steps = 64, 
                        log_interval=100)  # Added log_interval
             print(f"Finished training {env_id} with {config}")
 
