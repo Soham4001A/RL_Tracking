@@ -98,12 +98,15 @@ def small_net_arch(obs_dim):
     else:
         return dict(pi=[256, 256], qf=[512, 512])
 
+def big_net_arch(obs_dim):
+    return dict(pi=[2048, 2048], qf=[2048, 2048])
+
 def train_and_evaluate(env_id, config):
     # Initialize variables to avoid reference errors
     features_extractor_class = None
     extractor_kwargs = {}
     # Move env creation to the top so it is always defined before use
-    n_envs = 16
+    n_envs = 128
     env = make_vec_env(env_id, n_envs=n_envs)
     with suppress_tqdm_cleanup():
         try:
@@ -163,10 +166,10 @@ def train_and_evaluate(env_id, config):
                     # extractor_kwargs already set above
                     
             # Increase number of parallel environments for better GPU utilization
-            # Set rollout and gradient step parameters
+            # Set rollout and gradient step parameters for max throughput
             train_freq = (1, 'step')
-            gradient_steps = 16
-            batch_size = 256
+            gradient_steps = 128
+            batch_size = 4096
             
             # Only apply custom feature extractor settings when not using Baseline
             obs_dim = env.observation_space.shape[0]
@@ -179,11 +182,11 @@ def train_and_evaluate(env_id, config):
                         observation_space=env.observation_space,
                         **extractor_kwargs
                     ),
-                    net_arch=small_net_arch(obs_dim)
+                    net_arch=big_net_arch(obs_dim)
                 )
             else:
                 merged_policy_kwargs = dict(
-                    net_arch=small_net_arch(obs_dim)
+                    net_arch=big_net_arch(obs_dim)
                 )
             
             print(f"Environment Observation Dimension: {obs_dim}")
