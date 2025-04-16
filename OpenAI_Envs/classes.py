@@ -74,11 +74,19 @@ class MHAFeaturesExtractor(BaseFeaturesExtractor):
         # Flatten final output to feed into the policy & value networks
         self.flatten = nn.Flatten()
 
-    def forward(self, x):
+    def forward(self, observations: torch.Tensor) -> torch.Tensor:
+        batch_size = observations.shape[0] if len(observations.shape) > 1 else 1
+        # Reshape 1D input to match expected dimensions
+        if len(observations.shape) == 1:
+            observations = observations.unsqueeze(0)
+        if len(observations.shape) == 2:
+            seq_len = observations.shape[1]
+            observations = observations.view(batch_size, seq_len, 1)
+        
         # Reshape input into (batch_size, seq_len, features_per_seq)
-        batch_size = x.shape[0]
+        batch_size = observations.shape[0]
         features_per_seq = self.input_dim // self.seq_len
-        x = x.view(batch_size, self.seq_len, features_per_seq)
+        x = observations.view(batch_size, self.seq_len, features_per_seq)
 
         # Linear projection
         x = self.input_embedding(x)
@@ -379,12 +387,20 @@ class LMAFeaturesExtractor(BaseFeaturesExtractor):
         self.flatten = nn.Flatten()
         print("-----------------------------------------")
 
-    def forward(self, x):
-        batch_size = x.shape[0]
+    def forward(self, observations: torch.Tensor) -> torch.Tensor:
+        batch_size = observations.shape[0] if len(observations.shape) > 1 else 1
+        # Reshape 1D input to match expected dimensions
+        if len(observations.shape) == 1:
+            observations = observations.unsqueeze(0)
+        if len(observations.shape) == 2:
+            seq_len = observations.shape[1]
+            observations = observations.view(batch_size, seq_len, 1)
+            
+        batch_size = observations.shape[0]
         try:
-             x_reshaped = x.view(batch_size, self.seq_len, self.features_per_step)
+             x_reshaped = observations.view(batch_size, self.seq_len, self.features_per_step)
         except RuntimeError as e:
-             raise RuntimeError(f"Error reshaping input: Input={x.shape}, Target=({batch_size},{self.seq_len},{self.features_per_step})") from e
+             raise RuntimeError(f"Error reshaping input: Input={observations.shape}, Target=({batch_size},{self.seq_len},{self.features_per_step})") from e
         z = self.initial_transform(x_reshaped)
         for block in self.lma_blocks:
             z = block(z)

@@ -209,6 +209,29 @@ def train_and_evaluate(env_id, config):
                 features = extractor(dummy_batch_tensor)
                 debug_tensor(features, "Batched feature extractor output")
 
+            # Test feature extractor with sample input
+            if features_extractor_class:
+                with open("debug.log", "a") as f:
+                    f.write(f"\nInput dimensions for {env_id}:\n")
+                    f.write(f"Observation space shape: {env.observation_space.shape}\n")
+                    f.write(f"Config seq_len: {config_seq_len}\n")
+                
+                # Create test batch
+                obs = env.observation_space.sample()
+                obs_batch = np.stack([obs] * 2)  # Create a mini-batch of size 2
+                obs_tensor = th.as_tensor(obs_batch).float()
+                
+                # Test feature extractor
+                extractor = features_extractor_class(
+                    observation_space=env.observation_space,
+                    **extractor_kwargs
+                )
+                with open("debug.log", "a") as f:
+                    f.write(f"Testing with batch input shape: {obs_tensor.shape}\n")
+                features = extractor(obs_tensor)
+                with open("debug.log", "a") as f:
+                    f.write(f"Feature extractor output shape: {features.shape}\n")
+
             # Create SAC model
             try:
                 model = SAC("MlpPolicy", 
