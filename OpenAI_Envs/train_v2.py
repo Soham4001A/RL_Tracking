@@ -189,6 +189,20 @@ def train_and_evaluate(env_id, config):
                 if len(dummy_batch.shape) == 1:  # Single observation
                     dummy_batch = np.stack([dummy_batch] * env.num_envs)
                 dummy_batch_tensor = th.as_tensor(dummy_batch).float()
+                try:
+                    extractor = features_extractor_class(
+                        observation_space=env.observation_space,
+                        **extractor_kwargs
+                    )
+                    features = extractor(dummy_batch_tensor)
+                    if features is None or features.shape[-1] == 0:
+                        raise ValueError(f"Feature extractor returned invalid output shape: {features.shape if features is not None else None}")
+                    with open("debug.log", "a") as f:
+                        f.write(f"\nFeature extractor validation successful. Output shape: {features.shape}\n")
+                except Exception as e:
+                    with open("debug.log", "a") as f:
+                        f.write(f"\nFeature extractor validation failed: {str(e)}\n")
+                    raise e
                 with open("debug.log", "a") as f:
                     f.write(f"\nTesting feature extractor with batched input:\n")
                     f.write(f"Input shape: {dummy_batch_tensor.shape}\n")
