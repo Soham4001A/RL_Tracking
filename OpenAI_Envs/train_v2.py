@@ -25,7 +25,7 @@ if not hasattr(np, "float_"):
 # -----------------------------------------------------------------------------
 TABLE_A = {
     "Pendulum-v1": {
-        "total_steps": 300_000,
+        "total_steps": 3_000,
         "n_envs": 8,
         "batch": 64,
         "grad_steps": 8,
