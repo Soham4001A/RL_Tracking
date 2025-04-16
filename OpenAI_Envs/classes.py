@@ -344,7 +344,7 @@ class LMAFeaturesExtractor(BaseFeaturesExtractor):
         observation_space,
         embed_dim=64, num_heads_stacking=4, target_l_new=3, d_new=32,
         num_heads_latent=4, ff_latent_hidden=64, num_lma_layers=2,
-        seq_len=6, dropout=0.1, bias=True
+        seq_len=4, dropout=0.1, bias=True
     ):
         print("\n--- Initializing LMAFeaturesExtractor ---")
         print("Calculating LMA dimensions...")
