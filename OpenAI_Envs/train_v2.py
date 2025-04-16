@@ -93,6 +93,12 @@ def debug_tensor(tensor, name):
             f.write(f"{name} value: {tensor}\n")
 
 def train_and_evaluate(env_id, config):
+    # Initialize variables to avoid reference errors
+    features_extractor_class = None
+    extractor_kwargs = {}
+    # Move env creation to the top so it is always defined before use
+    n_envs = 16
+    env = make_vec_env(env_id, n_envs=n_envs)
     with suppress_tqdm_cleanup():
         try:
             # --- Define Feature Extractor and Policy Kwargs ---
@@ -152,12 +158,9 @@ def train_and_evaluate(env_id, config):
                     
             # Increase number of parallel environments for better GPU utilization
             # Set rollout and gradient step parameters
-            n_envs = 16
             train_freq = (1, 'step')
             gradient_steps = 16
             batch_size = 256
-            
-            env = make_vec_env(env_id, n_envs=n_envs)
             
             # Only apply custom feature extractor settings when not using Baseline
             if config != "Baseline":
