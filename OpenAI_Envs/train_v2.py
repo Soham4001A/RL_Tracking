@@ -183,7 +183,7 @@ def run(env_id: str, table_cfg: dict, extractor_mode: str):
     rets = []
     for _ in range(100):
         done, ep_ret = False, 0.0
-        obs, _ = eval_env.reset()
+        obs = eval_env.reset()
         while not done:
             act, _ = model.predict(obs, deterministic=True)
             obs, reward, term, trunc, _ = eval_env.step(act)
