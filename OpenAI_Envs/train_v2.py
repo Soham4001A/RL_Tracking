@@ -10,7 +10,8 @@ import torch as th
 import warnings
 from classes import *  # Import custom feature extractors and utilities
 from tqdm_utils import suppress_tqdm_cleanup
-from sb3_contrib.common.wrappers import TimeFeatureWrapper, VecNormalize
+from sb3_contrib.common.wrappers import TimeFeatureWrapper
+from stable_baselines3.common.vec_env import VecNormalize
 
 # Suppress all warnings for cleaner output
 warnings.filterwarnings("ignore")
