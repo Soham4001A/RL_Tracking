@@ -62,7 +62,7 @@ if not hasattr(np, "float_"):
 TABLE_A = {
     "Pendulum-v1": {
         "total_steps": 300_000,
-        "n_envs": 64,
+        "n_envs": 128,
         "batch": 256,  # Increased batch size for stability
         "grad_steps": 8,
         "net_arch": dict(pi=[32, 32], qf=[32, 32]),
@@ -70,7 +70,7 @@ TABLE_A = {
     },
     "MountainCarContinuous-v0": {
         "total_steps": 300_000,
-        "n_envs":64,
+        "n_envs":128,
         "batch": 256,
         "grad_steps": 8,
         "net_arch": dict(pi=[32, 32], qf=[32, 32]),
@@ -78,7 +78,7 @@ TABLE_A = {
     },
     "BipedalWalker-v3": {
         "total_steps": 600_000,
-        "n_envs": 64,
+        "n_envs": 128,
         "batch": 256,
         "grad_steps": 8,
         "net_arch": dict(pi=[64, 64], qf=[128, 128]),
@@ -89,7 +89,7 @@ TABLE_A = {
 TABLE_B = {
     env: {
         "total_steps": 2_000_000 if env != "MountainCarContinuous-v0" else 1_000_000,
-        "n_envs": 64,
+        "n_envs": 128,
         "batch": 1024,  # Larger batch size for stability
         "grad_steps": 64,
         "lr": 3e-4,      # Lower learning rate for stability
@@ -178,21 +178,21 @@ def run(env_id: str, table_cfg: dict, extractor_mode: str):
         policy_kwargs.update(features_extractor_class=SafeFeaturesExtractor, features_extractor_kwargs=dict(extractor_cls=feat_cls, **feat_kwargs))
 
     if extractor_mode == "MHA":
-        lr = 1e-4
+        lr = 3e-4
         tau = 0.005
-        scheduler_factory = lambda optimizer: LinearLR(optimizer, start_factor=1.0, end_factor=1.0, total_iters=200_000)
+        scheduler_factory = lambda optimizer: LinearLR(optimizer, start_factor=1.0, end_factor=0.25, total_iters=cfg["total_steps"])
     elif extractor_mode == "LMA":
-        lr = 2e-4
+        lr = 3e-4
         tau = 0.002
-        scheduler_factory = lambda optimizer: LinearLR(optimizer, start_factor=1.0, end_factor=0.5, total_iters=200_000)
+        scheduler_factory = lambda optimizer: LinearLR(optimizer, start_factor=1.0, end_factor=0.25, total_iters=cfg["total_steps"])
     elif extractor_mode == "MHA_Lite":
-        lr = 2e-4
+        lr = 3e-4
         tau = 0.002
-        scheduler_factory = lambda optimizer: LinearLR(optimizer, start_factor=1.0, end_factor=1.0, total_iters=200_000)
+        scheduler_factory = lambda optimizer: LinearLR(optimizer, start_factor=1.0, end_factor=0.25, total_iters=cfg["total_steps"])
     else:  # Baseline
         lr = 3e-4
         tau = 0.005
-        scheduler_factory = lambda optimizer: LinearLR(optimizer, start_factor=1.0, end_factor=1.0, total_iters=200_000)
+        scheduler_factory = lambda optimizer: LinearLR(optimizer, start_factor=1.0, end_factor=0.25, total_iters=cfg["total_steps"])
 
     lr_scheduler_callback = LRSchedulerCallback(scheduler_factory)
 
