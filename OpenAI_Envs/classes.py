@@ -15,6 +15,18 @@ from mpl_toolkits.mplot3d import Axes3D
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 from stable_baselines3.common.callbacks import BaseCallback
 
+class LRSchedulerCallback(BaseCallback):
+            def __init__(self, scheduler_factory, verbose=0):
+                super().__init__(verbose)
+                self.scheduler_factory = scheduler_factory
+                self.scheduler = None
+            def _on_training_start(self):
+                optimizer = self.model.policy.optimizer
+                self.scheduler = self.scheduler_factory(optimizer)
+            def _on_step(self) -> bool:
+                if self.scheduler is not None:
+                    self.scheduler.step()
+                return True
 
 #===============================================
 # MHA Feature Extractor Implementation

@@ -12,6 +12,7 @@ from classes import *  # Import custom feature extractors and utilities
 from tqdm_utils import suppress_tqdm_cleanup
 from sb3_contrib.common.wrappers import TimeFeatureWrapper
 from stable_baselines3.common.vec_env import VecNormalize
+from torch.optim.lr_scheduler import LinearLR
 
 # Suppress all warnings for cleaner output
 warnings.filterwarnings("ignore")
@@ -171,18 +172,38 @@ def run(env_id: str, table_cfg: dict, extractor_mode: str):
     else:
         # Conservative settings for MHA/LMA/MHA_Lite
         batch_size = 256 if table_cfg is TABLE_A else 1024
-        # Remove max_grad_norm from policy_kwargs (not supported by SAC)
         if "max_grad_norm" in policy_kwargs:
             del policy_kwargs["max_grad_norm"]
+            
+        # Set learning rate and tau based on extractor_mode
+        if extractor_mode == "MHA":
+            lr = 1e-4
+            tau = 0.005
+            scheduler_factory = lambda optimizer: LinearLR(optimizer, start_factor=1.0, end_factor=1.0, total_iters=200_000)
+        elif extractor_mode == "LMA":
+            lr = 2e-4
+            tau = 0.002
+            scheduler_factory = lambda optimizer: LinearLR(optimizer, start_factor=1.0, end_factor=0.5, total_iters=200_000)
+        elif extractor_mode == "MHA_Lite":
+            lr = 2e-4
+            tau = 0.002
+            scheduler_factory = lambda optimizer: LinearLR(optimizer, start_factor=1.0, end_factor=1.0, total_iters=200_000)
+        else: # Fallback to default settings
+            print("WARNING: Unknown extractor mode, using default settings.")
+            lr = 3e-4
+            tau = 0.005
+            scheduler_factory = lambda optimizer: LinearLR(optimizer, start_factor=1.0, end_factor=1.0, total_iters=200_000)
+        
+        lr_scheduler_callback = LRSchedulerCallback(scheduler_factory)
         model = SAC(
             "MlpPolicy",
             env,
-            learning_rate=1e-4,
+            learning_rate=lr,
             buffer_size=cfg["buffer"],
             batch_size=batch_size,
             learning_starts=batch_size * 4,
             ent_coef="auto",
-            tau=0.005,
+            tau=tau,
             train_freq=(1, "step"),
             gradient_steps=cfg["grad_steps"],
             policy_kwargs=policy_kwargs,
@@ -191,7 +212,8 @@ def run(env_id: str, table_cfg: dict, extractor_mode: str):
         )
 
     # Train the agent
-    model.learn(total_timesteps=cfg["total_steps"], progress_bar=True, callback=ClipGradCallback(max_norm=0.5))
+    callbacks = [ClipGradCallback(max_norm=0.5), lr_scheduler_callback]
+    model.learn(total_timesteps=cfg["total_steps"], progress_bar=True, callback=callbacks)
 
     # Save VecNormalize stats after training
     env.save("vecnorm.pkl")
