@@ -138,6 +138,8 @@ def run(env_id: str, table_cfg: dict, extractor_mode: str):
     else:
         # Conservative settings for MHA/LMA/MHA_Lite
         batch_size = 256 if table_cfg is TABLE_A else 1024
+        # Add max_grad_norm to policy_kwargs for gradient clipping
+        policy_kwargs["max_grad_norm"] = 1.0
         model = SAC(
             "MlpPolicy",
             env,
@@ -147,7 +149,6 @@ def run(env_id: str, table_cfg: dict, extractor_mode: str):
             learning_starts=batch_size * 4,
             ent_coef="auto",
             tau=0.005,
-            max_grad_norm=1.0,
             train_freq=(1, "step"),
             gradient_steps=cfg["grad_steps"],
             policy_kwargs=policy_kwargs,
