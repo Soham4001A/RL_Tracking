@@ -92,7 +92,6 @@ TABLE_B = {
         "n_envs": 128,
         "batch": 1024,  # Larger batch size for stability
         "grad_steps": 64,
-        "lr": 3e-4,      # Lower learning rate for stability
         "tau": 0.005,    # Slower target net update
         "net_arch": dict(pi=[128, 128], qf=[256, 256]),
         "buffer": 1_000_000,
@@ -178,19 +177,19 @@ def run(env_id: str, table_cfg: dict, extractor_mode: str):
         policy_kwargs.update(features_extractor_class=SafeFeaturesExtractor, features_extractor_kwargs=dict(extractor_cls=feat_cls, **feat_kwargs))
 
     if extractor_mode == "MHA":
-        lr = 3e-4
+        lr = 6e-4
         tau = 0.005
         scheduler_factory = lambda optimizer: LinearLR(optimizer, start_factor=1.0, end_factor=0.25, total_iters=cfg["total_steps"])
     elif extractor_mode == "LMA":
-        lr = 3e-4
+        lr = 6e-4
         tau = 0.002
         scheduler_factory = lambda optimizer: LinearLR(optimizer, start_factor=1.0, end_factor=0.25, total_iters=cfg["total_steps"])
     elif extractor_mode == "MHA_Lite":
-        lr = 3e-4
+        lr = 6e-4
         tau = 0.002
         scheduler_factory = lambda optimizer: LinearLR(optimizer, start_factor=1.0, end_factor=0.25, total_iters=cfg["total_steps"])
     else:  # Baseline
-        lr = 3e-4
+        lr = 6e-4
         tau = 0.005
         scheduler_factory = lambda optimizer: LinearLR(optimizer, start_factor=1.0, end_factor=0.25, total_iters=cfg["total_steps"])
 
