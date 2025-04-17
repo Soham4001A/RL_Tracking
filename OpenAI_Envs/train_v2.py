@@ -31,7 +31,7 @@ if not hasattr(np, "float_"):
 # -----------------------------------------------------------------------------
 TABLE_A = {
     "Pendulum-v1": {
-        "total_steps": 3,
+        "total_steps": 300_000,
         "n_envs": 8,
         "batch": 256,  # Increased batch size for stability
         "grad_steps": 8,
@@ -41,7 +41,7 @@ TABLE_A = {
         "buffer": 100_000,
     },
     "MountainCarContinuous-v0": {
-        "total_steps": 3,
+        "total_steps": 300_000,
         "n_envs": 8,
         "batch": 256,
         "grad_steps": 8,
@@ -51,7 +51,7 @@ TABLE_A = {
         "buffer": 100_000,
     },
     "BipedalWalker-v3": {
-        "total_steps": 6,
+        "total_steps": 600_000,
         "n_envs": 8,
         "batch": 256,
         "grad_steps": 8,
@@ -202,7 +202,7 @@ def run(env_id: str, table_cfg: dict, extractor_mode: str):
     eval_env.training = False
     eval_env.norm_reward = False
     rets = []
-    for _ in range(1):
+    for _ in range(100):
         obs = eval_env.reset()
         done, ep_ret = False, 0.0
         while not done:
