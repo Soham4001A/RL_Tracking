@@ -143,7 +143,6 @@ def run(env_id: str, table_cfg: dict, extractor_mode: str):
             policy_kwargs=policy_kwargs,
             device="cuda" if th.cuda.is_available() else "cpu",
             verbose=1,
-            max_grad_norm=0.5,  # Gradient clipping
         )
     else:
         # Conservative settings for MHA/LMA/MHA_Lite
@@ -165,7 +164,6 @@ def run(env_id: str, table_cfg: dict, extractor_mode: str):
             policy_kwargs=policy_kwargs,
             device="cuda" if th.cuda.is_available() else "cpu",
             verbose=1,
-            max_grad_norm=0.5,  # Gradient clipping
         )
 
     # Train the agent
