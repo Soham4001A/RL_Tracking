@@ -31,7 +31,7 @@ if not hasattr(np, "float_"):
 # -----------------------------------------------------------------------------
 TABLE_A = {
     "Pendulum-v1": {
-        "total_steps": 300_000,
+        "total_steps": 3,
         "n_envs": 8,
         "batch": 256,  # Increased batch size for stability
         "grad_steps": 8,
@@ -172,8 +172,14 @@ def run(env_id: str, table_cfg: dict, extractor_mode: str):
     # Train the agent
     model.learn(total_timesteps=cfg["total_steps"], progress_bar=True)
 
+    # Save VecNormalize stats after training
+    env.save("vecnormalize.pkl")
+
     # ------------------- deterministic evaluation -------------------
-    eval_env = gym.make(env_id)
+    eval_env = make_vec_env(env_id, n_envs=1, wrapper_class=TimeFeatureWrapper)
+    eval_env = VecNormalize.load("vecnormalize.pkl", eval_env)
+    eval_env.training = False
+    eval_env.norm_reward = False
     rets = []
     for _ in range(100):
         done, ep_ret = False, 0.0
