@@ -6,179 +6,154 @@ import numpy as np
 from stable_baselines3 import SAC
 from stable_baselines3.common.env_util import make_vec_env
 import torch as th
-import torch.nn as nn
 import warnings
-from classes import *
+from classes import *  # custom extractors
 from tqdm_utils import suppress_tqdm_cleanup
 
 warnings.filterwarnings("ignore")
 
-# Patch for numpy.bool8 and numpy.float_ deprecation
-if not hasattr(np, 'bool8'):
+# -----------------------------------------------------------------------------
+# 0.  numpy compat shim
+# -----------------------------------------------------------------------------
+if not hasattr(np, "bool8"):
     np.bool8 = np.bool_
-if not hasattr(np, 'float_'):
+if not hasattr(np, "float_"):
     np.float_ = np.float64
 
-# List of environments (only continuous action spaces for SAC)
-env_names = [
-    "BipedalWalker-v3",           # Continuous action space
-    "MountainCarContinuous-v0",   # Continuous action space
-    "Pendulum-v1",                # Continuous action space
-]
+# -----------------------------------------------------------------------------
+# 1.  Table‑specific hyper‑params (A = quick, B = full)
+# -----------------------------------------------------------------------------
+TABLE_A = {
+    "Pendulum-v1": {
+        "total_steps": 300_000,
+        "n_envs": 8,
+        "batch": 64,
+        "grad_steps": 8,
+        "lr": 1e-3,
+        "tau": 0.02,
+        "net_arch": dict(pi=[32, 32], qf=[32, 32]),
+        "buffer": 100_000,
+    },
+    "MountainCarContinuous-v0": {
+        "total_steps": 300_000,
+        "n_envs": 8,
+        "batch": 64,
+        "grad_steps": 8,
+        "lr": 1e-3,
+        "tau": 0.02,
+        "net_arch": dict(pi=[32, 32], qf=[32, 32]),
+        "buffer": 100_000,
+    },
+    "BipedalWalker-v3": {
+        "total_steps": 600_000,
+        "n_envs": 8,
+        "batch": 128,
+        "grad_steps": 8,
+        "lr": 3e-4,
+        "tau": 0.02,
+        "net_arch": dict(pi=[64, 64], qf=[128, 128]),
+        "buffer": 1_000_000,
+    },
+}
 
-# --- Get Model Choice ---
-# Added "Baseline" option
-#config = input("Which Model (Baseline/MHA/LMA/MHA_Lite)? ")
-#if config not in ["Baseline", "MHA", "LMA", "MHA_Lite"]:
-#    raise ValueError("Invalid Model choice. Please enter 'Baseline', 'MHA', 'LMA' or 'MHA_Lite.")
+TABLE_B = {
+    env: {
+        "total_steps": 2_000_000 if env != "MountainCarContinuous-v0" else 1_000_000,
+        "n_envs": 64,
+        "batch": 1_024,
+        "grad_steps": 64,
+        "lr": 3e-4,
+        "tau": 0.005,
+        "net_arch": dict(pi=[128, 128], qf=[256, 256]),
+        "buffer": 1_000_000,
+    }
+    for env in ["Pendulum-v1", "MountainCarContinuous-v0", "BipedalWalker-v3"]
+}
 
-config_names = ["MHA", "LMA", "MHA_Lite"]
+# -----------------------------------------------------------------------------
+# 2.  Safe wrapper for any extractor
+# -----------------------------------------------------------------------------
+class SafeFeaturesExtractor(BaseFeaturesExtractor):
+    def __init__(self, observation_space, extractor_cls=None, **kwargs):
+        super().__init__(observation_space, features_dim=1)  # temp features_dim, will be overwritten
+        self.inner = extractor_cls(observation_space, **kwargs)
+        self._features_dim = self.inner.features_dim
 
-total_timesteps = 1_000_000  # Increased from 300k to 1M
-eval_episodes = 100         # Number of episodes for evaluation
-results = {}
+    def forward(self, obs):
+        x = self.inner(obs)
+        if x.numel() == 0:
+            raise RuntimeError("Extractor produced 0‑dim features")
+        return x
 
-def get_env_hyperparams(env_id):
-    if env_id == "BipedalWalker-v3":
-        return {
-            "total_timesteps": 2_000_000,
-            "learning_rate": 3e-4,
-            "buffer_size": 2_000_000,
-            "batch_size": 256,
-            "gamma": 0.99,
-            "tau": 0.005
-        }
-    elif env_id == "MountainCarContinuous-v0":
-        return {
-            "total_timesteps": 500_000,
-            "learning_rate": 3e-4,
-            "buffer_size": 500_000,
-            "batch_size": 256,
-            "gamma": 0.999,  # Higher gamma for sparse rewards
-            "tau": 0.005
-        }
-    else:  # Pendulum-v1
-        return {
-            "total_timesteps": 1_000_000,
-            "learning_rate": 3e-4,
-            "buffer_size": 1_000_000,
-            "batch_size": 256,
-            "gamma": 0.99,
-            "tau": 0.005
-        }
+# -----------------------------------------------------------------------------
+# 3.  Run one (env, extractor) experiment
+# -----------------------------------------------------------------------------
 
-def train_and_evaluate(env_id, config):
-    with suppress_tqdm_cleanup():
-        try:
-            # --- Define Feature Extractor and Policy Kwargs ---
-            policy_kwargs = None
-            
-            if env_id == "CartPole-v1":
-                config_seq_len = 4
-            elif env_id == "Acrobot-v1":
-                config_seq_len = 6
-            elif env_id == "BipedalWalker-v3":
-                config_seq_len = 24
-            elif env_id == "MountainCarContinuous-v0":
-                config_seq_len = 2
-            elif env_id == "Pendulum-v1":
-                config_seq_len = 3
-            
-            if config != "Baseline":
-                target_seq_len = -1
-                features_extractor_class = None
-                extractor_kwargs = {}
+def run(env_id: str, table_cfg: dict, extractor_mode: str):
+    cfg = table_cfg[env_id]
+    env = make_vec_env(env_id, n_envs=cfg["n_envs"])
+    obs_dim = env.observation_space.shape[0]
 
-                if config == "MHA":
-                    features_extractor_class = MHAFeaturesExtractor
-                    # User's desired MHA extractor params
-                    extractor_kwargs = dict(
-                        embed_dim=128, num_heads=4,
-                        ff_hidden=128*4, num_layers=4,
-                        dropout=0.1, seq_len = config_seq_len
-                    )
+    # -------- feature extractor --------
+    feat_cls, feat_kwargs = None, {}
+    if extractor_mode != "Baseline":
+        embed = max(32, obs_dim * 4)
+        heads = 2 if obs_dim < 8 else 4
+        layers = 2 if obs_dim < 8 else 4
+        if extractor_mode == "MHA":
+            feat_cls, feat_kwargs = MHAFeaturesExtractor, dict(embed_dim=embed, num_heads=heads, ff_hidden=embed*4, num_layers=layers, dropout=0.05, seq_len=obs_dim)
+        elif extractor_mode == "LMA":
+            feat_cls, feat_kwargs = LMAFeaturesExtractor, dict(embed_dim=embed, num_heads_stacking=heads, target_l_new=obs_dim//2, d_new=embed//2, num_heads_latent=heads, ff_latent_hidden=embed*2, num_lma_layers=layers, dropout=0.05, bias=True, seq_len=obs_dim)
+        elif extractor_mode == "MHA_Lite":
+            feat_cls, feat_kwargs = MHAFeaturesExtractor, dict(embed_dim=embed//2, num_heads=heads, ff_hidden=(embed//2)*4, num_layers=layers, dropout=0.05, seq_len=obs_dim)
 
-                elif config == "LMA":
-                    features_extractor_class = LMAFeaturesExtractor
-                    target_seq = config_seq_len/2
-                    if type(target_seq) == float:
-                        target_seq = int(target_seq)
-                    # User's desired LMA extractor params
-                    extractor_kwargs = dict(
-                        embed_dim=128, num_heads_stacking=4, target_l_new=target_seq, d_new=64,
-                        num_heads_latent=4, ff_latent_hidden=64*4, num_lma_layers=4,
-                        dropout=0.1, bias=True, seq_len = config_seq_len
-                    )
+    policy_kwargs = dict(net_arch=cfg["net_arch"])
+    if feat_cls:
+        policy_kwargs.update(features_extractor_class=SafeFeaturesExtractor, features_extractor_kwargs=dict(extractor_cls=feat_cls, **feat_kwargs))
 
-                elif config == "MHA_Lite":
-                    features_extractor_class = MHAFeaturesExtractor
-                    # User's desired MHA_Lite extractor params (using MHA extractor)
-                    extractor_kwargs = dict(
-                        embed_dim=64, num_heads=4,
-                        ff_hidden=64*4, num_layers=4,
-                        dropout=0.1, seq_len = config_seq_len 
-                    )
-                    
-            env = make_vec_env(env_id, n_envs=25)
-            policy_kwargs = dict(
-                features_extractor_class=features_extractor_class,
-                features_extractor_kwargs=extractor_kwargs
-                
-            )
-            
-            obs_dim = env.observation_space.shape[0]
-            print(f"Environment Observation Dimension: {obs_dim}")
-            print(f"Using Custom Feature Extractor: {config}")
-                
-            # Get environment-specific hyperparameters
-            hyperparams = get_env_hyperparams(env_id)
-            
-            # Create SAC model with environment-specific hyperparameters
-            model = SAC("MlpPolicy", 
-                       env, 
-                       learning_rate=hyperparams["learning_rate"],
-                       buffer_size=hyperparams["buffer_size"],
-                       batch_size=hyperparams["batch_size"],
-                       tau=hyperparams["tau"],
-                       gamma=hyperparams["gamma"],
-                       train_freq=1,
-                       gradient_steps=1,
-                       learning_starts=10000,
-                       policy_kwargs=policy_kwargs, 
-                       tensorboard_log="./TensorBoardLogs", 
-                       verbose=1)
-            
-            print(f"Starting training for {env_id} with {config}...")
-            model.learn(total_timesteps=hyperparams["total_timesteps"], 
-                       progress_bar=True, 
-                       log_interval=100)  # Added log_interval
-            print(f"Finished training {env_id} with {config}")
+    model = SAC(
+        "MlpPolicy",
+        env,
+        learning_rate=cfg["lr"],
+        buffer_size=cfg["buffer"],
+        batch_size=cfg["batch"],
+        learning_starts=cfg["batch"] * 4,
+        ent_coef="auto",
+        tau=cfg["tau"],
+        train_freq=(1, "step"),
+        gradient_steps=cfg["grad_steps"],
+        policy_kwargs=policy_kwargs,
+        device="cuda" if th.cuda.is_available() else "cpu",
+        verbose=1,
+    )
 
-            # Evaluation
-            eval_env = gym.make(env_id)
-            episode_rewards = []
-            for _ in range(eval_episodes):
-                obs, _ = eval_env.reset()
-                done = False
-                total_reward = 0
-                while not done:
-                    action, _ = model.predict(obs, deterministic=True)
-                    obs, reward, term, trunc, _ = eval_env.step(action)
-                    total_reward += reward
-                    done = bool(term or trunc)  # Convert to standard Python boolean
-                episode_rewards.append(total_reward)
-            avg_reward = float(np.mean(episode_rewards))
-            std_reward = float(np.std(episode_rewards))
-            results[env_id] = {'mean': avg_reward, 'std': std_reward}
-        except Exception as e:
-            results[env_id] = {'mean': f"Error: {e}", 'std': None}
+    model.learn(total_timesteps=cfg["total_steps"], progress_bar=True)
 
-# Run
-for env in env_names:
-    for config in config_names:
-        print(f"\n--- Training and Evaluating {env} with {config} ---")
-        train_and_evaluate(env,config)
-        # Log results for this (env, config) pair
-        with open("results.log", "a") as f:
-            f.write(f"Results for {env} with {config}: {results[env]}")
-            f.write(f"{env} ({config}): Mean = {results[env]['mean']}, Std = {results[env]['std']}\n")
+    # deterministic eval
+    eval_env = gym.make(env_id)
+    rets = []
+    for _ in range(50):
+        done, ep_ret = False, 0.0
+        obs, _ = eval_env.reset()
+        while not done:
+            act, _ = model.predict(obs, deterministic=True)
+            obs, reward, term, trunc, _ = eval_env.step(act)
+            ep_ret += reward
+            done = term or trunc
+        rets.append(ep_ret)
+    mean, std = float(np.mean(rets)), float(np.std(rets))
+    log_line = f"{env_id:<28} | {extractor_mode:<8} | {mean:8.2f} ± {std:6.2f}\n"
+    with open("results.log", "a") as f:
+        f.write(log_line)
+
+# -----------------------------------------------------------------------------
+# 4.  entry‑point
+# -----------------------------------------------------------------------------
+if __name__ == "__main__":
+    mode = input("Select table (A=quick / B=full) [A]: ").strip().lower() or "a"
+    assert mode in ("a", "b"), "Please type 'A' or 'B'"
+    table = TABLE_A if mode == "a" else TABLE_B
+
+    for env in table.keys():
+        for extractor in ["Baseline", "MHA", "LMA", "MHA_Lite"]:
+            run(env, table, extractor)
