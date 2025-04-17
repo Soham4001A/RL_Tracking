@@ -10,6 +10,7 @@ import torch as th
 import warnings
 from classes import *  # Import custom feature extractors and utilities
 from tqdm_utils import suppress_tqdm_cleanup
+from sb3_contrib.common.wrappers import TimeFeatureWrapper, VecNormalize
 
 # Suppress all warnings for cleaner output
 warnings.filterwarnings("ignore")
@@ -96,7 +97,11 @@ class SafeFeaturesExtractor(BaseFeaturesExtractor):
 # -----------------------------------------------------------------------------
 def run(env_id: str, table_cfg: dict, extractor_mode: str):
     cfg = table_cfg[env_id]
-    env = make_vec_env(env_id, n_envs=cfg["n_envs"])
+    # Observation normalization: add TimeFeatureWrapper and VecNormalize
+    env = make_vec_env(env_id, n_envs=cfg["n_envs"], wrapper_class=TimeFeatureWrapper)
+    env = VecNormalize(env, norm_obs=True, norm_reward=False, clip_obs=10.0)
+    # Reward scaling: add VecNormalize for reward
+    env = VecNormalize(env, norm_obs=False, norm_reward=True, clip_reward=1.0)
     obs_dim = env.observation_space.shape[0]
 
     # -------- feature extractor selection --------
@@ -106,6 +111,7 @@ def run(env_id: str, table_cfg: dict, extractor_mode: str):
         embed = max(32, obs_dim * 4)
         heads = 2 if obs_dim < 8 else 4
         layers = 2 if obs_dim < 8 else 4
+        # NOTE: The way these are setup could be improved -> They are harcoded rules but LMA reduction does not necessarily need these hardcoded rules -> For example, FFN size should be based off d_new and not a reduction factor
         if extractor_mode == "MHA":
             feat_cls, feat_kwargs = MHAFeaturesExtractor, dict(embed_dim=embed, num_heads=heads, ff_hidden=embed*4, num_layers=layers, dropout=0.05, seq_len=obs_dim)
         elif extractor_mode == "LMA":
@@ -115,6 +121,8 @@ def run(env_id: str, table_cfg: dict, extractor_mode: str):
 
     # Set up policy network architecture and feature extractor
     policy_kwargs = dict(net_arch=cfg["net_arch"])
+    # Smaller policy stdev
+    policy_kwargs.update(log_std_init=-2.0, log_std_bounds=(-5, 2))
     if feat_cls:
         policy_kwargs.update(features_extractor_class=SafeFeaturesExtractor, features_extractor_kwargs=dict(extractor_cls=feat_cls, **feat_kwargs))
 
@@ -123,7 +131,7 @@ def run(env_id: str, table_cfg: dict, extractor_mode: str):
         model = SAC(
             "MlpPolicy",
             env,
-            learning_rate=cfg["lr"],
+            learning_rate=1e-4,  # Lower LR for stability
             buffer_size=cfg["buffer"],
             batch_size=cfg["batch"],
             learning_starts=cfg["batch"] * 4,
@@ -134,6 +142,7 @@ def run(env_id: str, table_cfg: dict, extractor_mode: str):
             policy_kwargs=policy_kwargs,
             device="cuda" if th.cuda.is_available() else "cpu",
             verbose=1,
+            max_grad_norm=0.5,  # Gradient clipping
         )
     else:
         # Conservative settings for MHA/LMA/MHA_Lite
@@ -144,7 +153,7 @@ def run(env_id: str, table_cfg: dict, extractor_mode: str):
         model = SAC(
             "MlpPolicy",
             env,
-            learning_rate=3e-4,
+            learning_rate=1e-4,
             buffer_size=cfg["buffer"],
             batch_size=batch_size,
             learning_starts=batch_size * 4,
@@ -155,6 +164,7 @@ def run(env_id: str, table_cfg: dict, extractor_mode: str):
             policy_kwargs=policy_kwargs,
             device="cuda" if th.cuda.is_available() else "cpu",
             verbose=1,
+            max_grad_norm=0.5,  # Gradient clipping
         )
 
     # Train the agent

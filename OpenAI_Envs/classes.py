@@ -102,7 +102,10 @@ class MHAFeaturesExtractor(BaseFeaturesExtractor):
         x = self.transformer(x)
 
         # Flatten for final feature vector
-        return self.flatten(x)
+        out = self.flatten(x)
+        if torch.isnan(out).any():
+            raise RuntimeError("NaN detected in MHAFeaturesExtractor output")
+        return out
 
     def _positional_encoding(self, seq_len, embed_dim):
         """Sine-cosine positional encoding, shape: (seq_len, embed_dim)."""
@@ -405,6 +408,8 @@ class LMAFeaturesExtractor(BaseFeaturesExtractor):
         for block in self.lma_blocks:
             z = block(z)
         features = self.flatten(z)
+        if torch.isnan(features).any():
+            raise RuntimeError("NaN detected in LMAFeaturesExtractor output")
         return features
 
 # 1. Safe feature extractor wrapper
@@ -416,6 +421,8 @@ class SafeFeaturesExtractor(BaseFeaturesExtractor):
         x = self.extractor(obs)
         if x.numel() == 0:
             raise RuntimeError("Extractor produced 0-dim features")
+        if torch.isnan(x).any():
+            raise RuntimeError("NaN detected in SafeFeaturesExtractor output")
         return x
 
 class RewardLoggerCallback(BaseCallback):
