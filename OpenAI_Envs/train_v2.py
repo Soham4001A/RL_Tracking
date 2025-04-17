@@ -163,7 +163,7 @@ def run(env_id: str, table_cfg: dict, extractor_mode: str):
     # ------------------- deterministic evaluation -------------------
     eval_env = gym.make(env_id)
     rets = []
-    for _ in range(50):
+    for _ in range(100):
         done, ep_ret = False, 0.0
         obs, _ = eval_env.reset()
         while not done:
@@ -189,5 +189,5 @@ if __name__ == "__main__":
 
     for env in table.keys():
         #for extractor in ["Baseline", "MHA", "LMA", "MHA_Lite"]:
-        for extractor in ["MHA", "LMA", "MHA_Lite"]:
+        for extractor in ["MHA", "LMA", "MHA_Lite"]: # Debugging Specific Feature Extractors
             run(env, table, extractor)
