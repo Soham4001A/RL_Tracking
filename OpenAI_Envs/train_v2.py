@@ -207,9 +207,8 @@ def run(env_id: str, table_cfg: dict, extractor_mode: str):
         done, ep_ret = False, 0.0
         while not done:
             act, _ = model.predict(obs, deterministic=True)
-            obs, reward, term, trunc, _ = eval_env.step(act)
+            obs, reward, done, info = eval_env.step(act)
             ep_ret += reward
-            done = term or trunc
         rets.append(ep_ret)
     mean, std = float(np.mean(rets)), float(np.std(rets))
     log_line = f"{env_id:<28} | {extractor_mode:<8} | {mean:8.2f} ± {std:6.2f}\n"
