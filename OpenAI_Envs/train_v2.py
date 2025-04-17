@@ -186,5 +186,6 @@ if __name__ == "__main__":
     table = TABLE_A if mode == "a" else TABLE_B
 
     for env in table.keys():
-        for extractor in ["Baseline", "MHA", "LMA", "MHA_Lite"]:
+        #for extractor in ["Baseline", "MHA", "LMA", "MHA_Lite"]:
+        for extractor in ["MHA", "LMA", "MHA_Lite"]:
             run(env, table, extractor)
