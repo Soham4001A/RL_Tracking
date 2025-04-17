@@ -31,7 +31,7 @@ if not hasattr(np, "float_"):
 # -----------------------------------------------------------------------------
 TABLE_A = {
     "Pendulum-v1": {
-        "total_steps": 300_000,
+        "total_steps": 3,
         "n_envs": 8,
         "batch": 256,  # Increased batch size for stability
         "grad_steps": 8,
@@ -41,7 +41,7 @@ TABLE_A = {
         "buffer": 100_000,
     },
     "MountainCarContinuous-v0": {
-        "total_steps": 300_000,
+        "total_steps": 3,
         "n_envs": 8,
         "batch": 256,
         "grad_steps": 8,
@@ -51,7 +51,7 @@ TABLE_A = {
         "buffer": 100_000,
     },
     "BipedalWalker-v3": {
-        "total_steps": 600_000,
+        "total_steps": 6,
         "n_envs": 8,
         "batch": 256,
         "grad_steps": 8,
@@ -96,16 +96,22 @@ class SafeFeaturesExtractor(BaseFeaturesExtractor):
 # 3.  Run one (env, extractor) experiment
 #     Trains and evaluates an RL agent on a given environment and feature extractor.
 # -----------------------------------------------------------------------------
+def make_norm_env(env_id, n_envs, clip_reward=1.0):
+    venv = make_vec_env(env_id, n_envs=n_envs, wrapper_class=TimeFeatureWrapper)
+    venv = VecNormalize(
+        venv,
+        norm_obs=True,
+        norm_reward=True,
+        clip_obs=10.0,
+        clip_reward=clip_reward
+    )
+    return venv
+
 def run(env_id: str, table_cfg: dict, extractor_mode: str):
     cfg = table_cfg[env_id]
-    # Observation normalization: add TimeFeatureWrapper and VecNormalize
-    env = make_vec_env(env_id, n_envs=cfg["n_envs"], wrapper_class=TimeFeatureWrapper)
-    env = VecNormalize(env, norm_obs=True, norm_reward=False, clip_obs=10.0)
-    # Reward scaling: apply clip_reward=10.0 only for BipedalWalker-v3
-    if env_id == "BipedalWalker-v3":
-        env = VecNormalize(env, norm_obs=False, norm_reward=True, clip_reward=10.0)
-    else:
-        env = VecNormalize(env, norm_obs=False, norm_reward=True, clip_reward=1.0)
+    # Use a single VecNormalize for both obs and reward
+    clip_reward = 10.0 if env_id == "BipedalWalker-v3" else 1.0
+    env = make_norm_env(env_id, cfg["n_envs"], clip_reward=clip_reward)
     obs_dim = env.observation_space.shape[0]
 
     # -------- feature extractor selection --------
@@ -188,21 +194,22 @@ def run(env_id: str, table_cfg: dict, extractor_mode: str):
     model.learn(total_timesteps=cfg["total_steps"], progress_bar=True, callback=ClipGradCallback(max_norm=0.5))
 
     # Save VecNormalize stats after training
-    env.save("vecnormalize.pkl")
+    env.save("vecnorm.pkl")
 
     # ------------------- deterministic evaluation -------------------
-    eval_env = make_vec_env(env_id, n_envs=1, wrapper_class=TimeFeatureWrapper)
-    eval_env = VecNormalize.load("vecnormalize.pkl", eval_env)
+    eval_env = make_norm_env(env_id, 1, clip_reward=clip_reward)
+    eval_env = VecNormalize.load("vecnorm.pkl", eval_env)
     eval_env.training = False
     eval_env.norm_reward = False
     rets = []
-    for _ in range(100):
+    for _ in range(1):
+        obs, _ = eval_env.reset()
         done, ep_ret = False, 0.0
-        obs = eval_env.reset()
         while not done:
             act, _ = model.predict(obs, deterministic=True)
-            obs, reward, done, info = eval_env.step(act)
+            obs, reward, term, trunc, _ = eval_env.step(act)
             ep_ret += reward
+            done = term or trunc
         rets.append(ep_ret)
     mean, std = float(np.mean(rets)), float(np.std(rets))
     log_line = f"{env_id:<28} | {extractor_mode:<8} | {mean:8.2f} ± {std:6.2f}\n"
