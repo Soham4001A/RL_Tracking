@@ -122,8 +122,8 @@ def run(env_id: str, table_cfg: dict, extractor_mode: str):
 
     # Set up policy network architecture and feature extractor
     policy_kwargs = dict(net_arch=cfg["net_arch"])
-    # Smaller policy stdev
-    policy_kwargs.update(log_std_init=-2.0, log_std_bounds=(-5, 2))
+    # Only set log_std_init (log_std_bounds is not supported by SB3 SAC)
+    policy_kwargs.update(log_std_init=-2.0)
     if feat_cls:
         policy_kwargs.update(features_extractor_class=SafeFeaturesExtractor, features_extractor_kwargs=dict(extractor_cls=feat_cls, **feat_kwargs))
 
