@@ -203,7 +203,7 @@ def run(env_id: str, table_cfg: dict, extractor_mode: str):
     eval_env.norm_reward = False
     rets = []
     for _ in range(1):
-        obs, _ = eval_env.reset()
+        obs = eval_env.reset()
         done, ep_ret = False, 0.0
         while not done:
             act, _ = model.predict(obs, deterministic=True)
