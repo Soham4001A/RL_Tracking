@@ -125,11 +125,8 @@ def run(env_id: str, table_cfg: dict, extractor_mode: str):
             max_attempts = 10
             attempt = 0
             while d_new % num_heads_latent != 0 and attempt < max_attempts:
-                d_new = find_closest_divisor(d_new, num_heads_latent)
+                num_heads_latent = find_closest_divisor(d_new, num_heads_latent)
                 attempt += 1
-            # As a last resort, force d_new to be a multiple of num_heads_latent
-            if d_new % num_heads_latent != 0:
-                d_new = num_heads_latent * max(1, d_new // num_heads_latent)
             feat_cls, feat_kwargs = LMAFeaturesExtractor, dict(embed_dim=embed, num_heads_stacking=heads, target_l_new=obs_dim//2, d_new=d_new, num_heads_latent=num_heads_latent, ff_latent_hidden=embed*2, num_lma_layers=layers, dropout=0.05, bias=True, seq_len=obs_dim)
         elif extractor_mode == "MHA_Lite":
             # Special check for MHA Lite: ensure d_new is a multiple of num_heads_latent
@@ -137,12 +134,9 @@ def run(env_id: str, table_cfg: dict, extractor_mode: str):
             max_attempts = 10
             attempt = 0
             while d_new % heads != 0 and attempt < max_attempts:
-                d_new = find_closest_divisor(d_new, heads)
+                heads = find_closest_divisor(d_new, heads)
                 attempt += 1
-            # As a last resort, force d_new to be a multiple of num_heads_latent
-            if d_new % heads != 0:
-                d_new = heads * max(1, d_new // heads)
-            feat_cls, feat_kwargs = MHAFeaturesExtractor, dict(embed_dim=embed//2, num_heads=heads, ff_hidden=(embed//2)*4, num_layers=layers, dropout=0.05, seq_len=obs_dim)
+            feat_cls, feat_kwargs = MHAFeaturesExtractor, dict(embed_dim=d_new, num_heads=heads, ff_hidden=d_new*4, num_layers=layers, dropout=0.05, seq_len=obs_dim)
 
     # Set up policy network architecture and feature extractor
     policy_kwargs = dict(net_arch=cfg["net_arch"])
