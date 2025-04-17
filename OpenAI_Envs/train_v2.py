@@ -41,7 +41,7 @@ TABLE_A = {
         "buffer": 100_000,
     },
     "MountainCarContinuous-v0": {
-        "total_steps": 300_000,
+        "total_steps": 3,
         "n_envs": 8,
         "batch": 256,
         "grad_steps": 8,
@@ -51,7 +51,7 @@ TABLE_A = {
         "buffer": 100_000,
     },
     "BipedalWalker-v3": {
-        "total_steps": 600_000,
+        "total_steps": 6,
         "n_envs": 8,
         "batch": 256,
         "grad_steps": 8,
