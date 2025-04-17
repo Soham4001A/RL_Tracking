@@ -115,11 +115,15 @@ def run(env_id: str, table_cfg: dict, extractor_mode: str):
         embed = max(32, obs_dim * 4)
         heads = 2 if obs_dim < 8 else 4
         layers = 2 if obs_dim < 8 else 4
-        # NOTE: The way these are setup could be improved -> They are harcoded rules but LMA reduction does not necessarily need these hardcoded rules -> For example, FFN size should be based off d_new and not a reduction factor
         if extractor_mode == "MHA":
             feat_cls, feat_kwargs = MHAFeaturesExtractor, dict(embed_dim=embed, num_heads=heads, ff_hidden=embed*4, num_layers=layers, dropout=0.05, seq_len=obs_dim)
         elif extractor_mode == "LMA":
-            feat_cls, feat_kwargs = LMAFeaturesExtractor, dict(embed_dim=embed, num_heads_stacking=heads, target_l_new=obs_dim//2, d_new=embed//2, num_heads_latent=heads, ff_latent_hidden=embed*2, num_lma_layers=layers, dropout=0.05, bias=True, seq_len=obs_dim)
+            d_new = embed // 2
+            num_heads_latent = heads
+            # Special check for BipedalWalker-v3: d_new must be divisible by num_heads_latent
+            if env_id == "BipedalWalker-v3" and d_new % num_heads_latent != 0:
+                d_new = find_closest_divisor(d_new, num_heads_latent)
+            feat_cls, feat_kwargs = LMAFeaturesExtractor, dict(embed_dim=embed, num_heads_stacking=heads, target_l_new=obs_dim//2, d_new=d_new, num_heads_latent=num_heads_latent, ff_latent_hidden=embed*2, num_lma_layers=layers, dropout=0.05, bias=True, seq_len=obs_dim)
         elif extractor_mode == "MHA_Lite":
             feat_cls, feat_kwargs = MHAFeaturesExtractor, dict(embed_dim=embed//2, num_heads=heads, ff_hidden=(embed//2)*4, num_layers=layers, dropout=0.05, seq_len=obs_dim)
 
