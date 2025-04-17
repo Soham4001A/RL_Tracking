@@ -138,8 +138,9 @@ def run(env_id: str, table_cfg: dict, extractor_mode: str):
     else:
         # Conservative settings for MHA/LMA/MHA_Lite
         batch_size = 256 if table_cfg is TABLE_A else 1024
-        # Add max_grad_norm to policy_kwargs for gradient clipping
-        policy_kwargs["max_grad_norm"] = 1.0
+        # Remove max_grad_norm from policy_kwargs (not supported by SAC)
+        if "max_grad_norm" in policy_kwargs:
+            del policy_kwargs["max_grad_norm"]
         model = SAC(
             "MlpPolicy",
             env,
