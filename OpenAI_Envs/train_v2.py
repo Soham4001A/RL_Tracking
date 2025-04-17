@@ -17,6 +17,35 @@ from torch.optim.lr_scheduler import LinearLR
 # Suppress all warnings for cleaner output
 warnings.filterwarnings("ignore")
 
+class LRSchedulerCallback(BaseCallback):
+    def __init__(self, scheduler_factory, verbose=0):
+        super().__init__(verbose)
+        self.scheduler_factory = scheduler_factory
+        self.schedulers = []
+        self.attached = False
+    def _on_step(self) -> bool:
+        if not self.attached:
+            # Attach schedulers to all optimizers (policy and critics)
+            optimizers = []
+            policy_opt = getattr(self.model.policy, 'optimizer', None)
+            if policy_opt is not None:
+                optimizers.append(policy_opt)
+            # Try to get critic optimizers (SB3: self.model.critic.optimizer or self.model.critic_optimizers)
+            critic_opts = []
+            if hasattr(self.model, 'critic_optimizer'):
+                critic_opts = [self.model.critic_optimizer]
+            elif hasattr(self.model, 'critic_optimizers'):
+                critic_opts = list(self.model.critic_optimizers)
+            for opt in critic_opts:
+                if opt is not None:
+                    optimizers.append(opt)
+            # Attach schedulers
+            self.schedulers = [self.scheduler_factory(opt) for opt in optimizers]
+            self.attached = True
+        for scheduler in self.schedulers:
+            scheduler.step()
+        return True
+
 # -----------------------------------------------------------------------------
 # 0.  numpy compat shim: Ensure compatibility with older numpy versions
 # -----------------------------------------------------------------------------
@@ -33,31 +62,25 @@ if not hasattr(np, "float_"):
 TABLE_A = {
     "Pendulum-v1": {
         "total_steps": 300_000,
-        "n_envs": 8,
+        "n_envs": 64,
         "batch": 256,  # Increased batch size for stability
         "grad_steps": 8,
-        "lr": 3e-4,    # Lower learning rate for stability
-        "tau": 0.005,  # Slower target net update
         "net_arch": dict(pi=[32, 32], qf=[32, 32]),
         "buffer": 100_000,
     },
     "MountainCarContinuous-v0": {
         "total_steps": 300_000,
-        "n_envs": 8,
+        "n_envs":64,
         "batch": 256,
         "grad_steps": 8,
-        "lr": 3e-4,
-        "tau": 0.005,
         "net_arch": dict(pi=[32, 32], qf=[32, 32]),
         "buffer": 100_000,
     },
     "BipedalWalker-v3": {
         "total_steps": 600_000,
-        "n_envs": 8,
+        "n_envs": 64,
         "batch": 256,
         "grad_steps": 8,
-        "lr": 3e-4,
-        "tau": 0.005,
         "net_arch": dict(pi=[64, 64], qf=[128, 128]),
         "buffer": 1_000_000,
     },
@@ -147,22 +170,42 @@ def run(env_id: str, table_cfg: dict, extractor_mode: str):
 
     # Set up policy network architecture and feature extractor
     policy_kwargs = dict(net_arch=cfg["net_arch"])
-    # Only set log_std_init (log_std_bounds is not supported by SB3 SAC)
-    policy_kwargs.update(log_std_init=-2.0)
+    if extractor_mode == "Baseline":
+        policy_kwargs.update(log_std_init=-0.5)
+    else:
+        policy_kwargs.update(log_std_init=-2.0)
     if feat_cls:
         policy_kwargs.update(features_extractor_class=SafeFeaturesExtractor, features_extractor_kwargs=dict(extractor_cls=feat_cls, **feat_kwargs))
 
-    # Use stable settings only for complex extractors
+    if extractor_mode == "MHA":
+        lr = 1e-4
+        tau = 0.005
+        scheduler_factory = lambda optimizer: LinearLR(optimizer, start_factor=1.0, end_factor=1.0, total_iters=200_000)
+    elif extractor_mode == "LMA":
+        lr = 2e-4
+        tau = 0.002
+        scheduler_factory = lambda optimizer: LinearLR(optimizer, start_factor=1.0, end_factor=0.5, total_iters=200_000)
+    elif extractor_mode == "MHA_Lite":
+        lr = 2e-4
+        tau = 0.002
+        scheduler_factory = lambda optimizer: LinearLR(optimizer, start_factor=1.0, end_factor=1.0, total_iters=200_000)
+    else:  # Baseline
+        lr = 3e-4
+        tau = 0.005
+        scheduler_factory = lambda optimizer: LinearLR(optimizer, start_factor=1.0, end_factor=1.0, total_iters=200_000)
+
+    lr_scheduler_callback = LRSchedulerCallback(scheduler_factory)
+
     if extractor_mode == "Baseline":
         model = SAC(
             "MlpPolicy",
             env,
-            learning_rate=cfg['lr'],  # Lower LR for stability
-            buffer_size=cfg["buffer"],
+            learning_rate=lr,
+            buffer_size=cfg['buffer'],
             batch_size=cfg["batch"],
             learning_starts=cfg["batch"] * 4,
             ent_coef="auto",
-            tau=cfg["tau"],
+            tau=tau,
             train_freq=(1, "step"),
             gradient_steps=cfg["grad_steps"],
             policy_kwargs=policy_kwargs,
@@ -170,31 +213,9 @@ def run(env_id: str, table_cfg: dict, extractor_mode: str):
             verbose=1,
         )
     else:
-        # Conservative settings for MHA/LMA/MHA_Lite
         batch_size = 256 if table_cfg is TABLE_A else 1024
         if "max_grad_norm" in policy_kwargs:
             del policy_kwargs["max_grad_norm"]
-            
-        # Set learning rate and tau based on extractor_mode
-        if extractor_mode == "MHA":
-            lr = 1e-4
-            tau = 0.005
-            scheduler_factory = lambda optimizer: LinearLR(optimizer, start_factor=1.0, end_factor=1.0, total_iters=200_000)
-        elif extractor_mode == "LMA":
-            lr = 2e-4
-            tau = 0.002
-            scheduler_factory = lambda optimizer: LinearLR(optimizer, start_factor=1.0, end_factor=0.5, total_iters=200_000)
-        elif extractor_mode == "MHA_Lite":
-            lr = 2e-4
-            tau = 0.002
-            scheduler_factory = lambda optimizer: LinearLR(optimizer, start_factor=1.0, end_factor=1.0, total_iters=200_000)
-        else: # Fallback to default settings
-            print("WARNING: Unknown extractor mode, using default settings.")
-            lr = 3e-4
-            tau = 0.005
-            scheduler_factory = lambda optimizer: LinearLR(optimizer, start_factor=1.0, end_factor=1.0, total_iters=200_000)
-        
-        lr_scheduler_callback = LRSchedulerCallback(scheduler_factory)
         model = SAC(
             "MlpPolicy",
             env,
