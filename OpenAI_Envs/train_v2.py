@@ -120,9 +120,10 @@ def run(env_id: str, table_cfg: dict, extractor_mode: str):
         elif extractor_mode == "LMA":
             d_new = embed // 2
             num_heads_latent = heads
-            # Special check for BipedalWalker-v3: d_new must be divisible by num_heads_latent
-            if env_id == "BipedalWalker-v3" and d_new % num_heads_latent != 0:
+            # Ensure d_new is divisible by num_heads_latent
+            if d_new % num_heads_latent != 0:
                 d_new = find_closest_divisor(d_new, num_heads_latent)
+            
             feat_cls, feat_kwargs = LMAFeaturesExtractor, dict(embed_dim=embed, num_heads_stacking=heads, target_l_new=obs_dim//2, d_new=d_new, num_heads_latent=num_heads_latent, ff_latent_hidden=embed*2, num_lma_layers=layers, dropout=0.05, bias=True, seq_len=obs_dim)
         elif extractor_mode == "MHA_Lite":
             feat_cls, feat_kwargs = MHAFeaturesExtractor, dict(embed_dim=embed//2, num_heads=heads, ff_hidden=(embed//2)*4, num_layers=layers, dropout=0.05, seq_len=obs_dim)
