@@ -101,8 +101,11 @@ def run(env_id: str, table_cfg: dict, extractor_mode: str):
     # Observation normalization: add TimeFeatureWrapper and VecNormalize
     env = make_vec_env(env_id, n_envs=cfg["n_envs"], wrapper_class=TimeFeatureWrapper)
     env = VecNormalize(env, norm_obs=True, norm_reward=False, clip_obs=10.0)
-    # Reward scaling: add VecNormalize for reward
-    env = VecNormalize(env, norm_obs=False, norm_reward=True, clip_reward=1.0)
+    # Reward scaling: apply clip_reward=10.0 only for BipedalWalker-v3
+    if env_id == "BipedalWalker-v3":
+        env = VecNormalize(env, norm_obs=False, norm_reward=True, clip_reward=10.0)
+    else:
+        env = VecNormalize(env, norm_obs=False, norm_reward=True, clip_reward=1.0)
     obs_dim = env.observation_space.shape[0]
 
     # -------- feature extractor selection --------
@@ -197,6 +200,6 @@ if __name__ == "__main__":
     table = TABLE_A if mode == "a" else TABLE_B
 
     for env in table.keys():
-        #for extractor in ["Baseline", "MHA", "LMA", "MHA_Lite"]:
-        for extractor in ["MHA", "LMA", "MHA_Lite"]: # Debugging Specific Feature Extractors
+        for extractor in ["Baseline", "MHA", "LMA", "MHA_Lite"]:
+        #for extractor in ["MHA", "LMA", "MHA_Lite"]: # Debugging Specific Feature Extractors
             run(env, table, extractor)
