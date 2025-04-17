@@ -1,8 +1,11 @@
 gymnasium
+gym
 numpy
 matplotlib
 stable-baselines3
 torch
 torchinfo
+tqdm
 os
 random
+dataclasses
