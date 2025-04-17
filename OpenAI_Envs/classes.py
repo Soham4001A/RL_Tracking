@@ -6,6 +6,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
+from torch.nn.utils import clip_grad_norm_
 import math
 from dataclasses import dataclass, field
 from matplotlib.animation import FuncAnimation
@@ -18,6 +19,29 @@ from stable_baselines3.common.callbacks import BaseCallback
 #===============================================
 # MHA Feature Extractor Implementation
 #===============================================
+
+class MHAEncoderBlock(nn.Module):
+    def __init__(self, embed_dim, num_heads, ff_hidden, dropout):
+        super().__init__()
+        self.ln1 = nn.LayerNorm(embed_dim)
+        self.attn = nn.MultiheadAttention(embed_dim, num_heads, dropout=dropout, batch_first=True)
+        self.dropout1 = nn.Dropout(dropout)
+        self.ln2 = nn.LayerNorm(embed_dim)
+        self.ff = nn.Sequential(
+            nn.Linear(embed_dim, ff_hidden),
+            nn.ReLU(),
+            nn.Linear(ff_hidden, embed_dim),
+            nn.Dropout(dropout)
+        )
+    def forward(self, x):
+        # Block-wise LayerNorm before attention
+        x2 = self.ln1(x)
+        attn_out, _ = self.attn(x2, x2, x2)
+        x = x + self.dropout1(attn_out)
+        # Block-wise LayerNorm before MLP
+        x2 = self.ln2(x)
+        x = x + self.ff(x2)
+        return x
 
 class MHAFeaturesExtractor(BaseFeaturesExtractor):
     def __init__(
@@ -58,18 +82,11 @@ class MHAFeaturesExtractor(BaseFeaturesExtractor):
         # Dropout layer for embeddings
         self.embedding_dropout = nn.Dropout(p=self.dropout_p)
 
-        # Transformer Encoder
-        #   - The 'dropout' parameter here applies to:
-        #       1) The self-attention mechanism outputs
-        #       2) The feed-forward sub-layer outputs
-        self.encoder_layer = nn.TransformerEncoderLayer(
-            d_model=embed_dim,
-            nhead=num_heads,
-            dim_feedforward=ff_hidden,
-            dropout=self.dropout_p,
-            batch_first=True
-        )
-        self.transformer = nn.TransformerEncoder(self.encoder_layer, num_layers=num_layers)
+        # Build block-wise encoder stack
+        self.encoder_blocks = nn.ModuleList([
+            MHAEncoderBlock(embed_dim, num_heads, ff_hidden, dropout)
+            for _ in range(num_layers)
+        ])
 
         # Flatten final output to feed into the policy & value networks
         self.flatten = nn.Flatten()
@@ -98,8 +115,9 @@ class MHAFeaturesExtractor(BaseFeaturesExtractor):
         # Drop out some embeddings for regularization
         x = self.embedding_dropout(x)
 
-        # Pass sequence through the Transformer encoder
-        x = self.transformer(x)
+        # Pass through block-wise LayerNorm transformer blocks
+        for block in self.encoder_blocks:
+            x = block(x)
 
         # Flatten for final feature vector
         out = self.flatten(x)
@@ -482,3 +500,15 @@ class GradientMonitorCallback(BaseCallback):
                 if grad_norm > 10:  # Threshold for exploding gradients
                     print(f"Warning: High gradient norm ({grad_norm:.2f}) in {name}")
         return True
+    
+class ClipGradCallback(BaseCallback):
+    def __init__(self, max_norm=0.5, verbose=0):
+        super().__init__(verbose)
+        self.max_norm = max_norm
+
+    def _on_step(self) -> bool:
+        # self.model.policy is the actor-critic
+        parameters = [p for p in self.model.policy.parameters()
+                      if p.requires_grad and p.grad is not None]
+        clip_grad_norm_(parameters, self.max_norm)
+        return True           # keep training

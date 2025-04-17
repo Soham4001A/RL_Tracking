@@ -139,7 +139,7 @@ def run(env_id: str, table_cfg: dict, extractor_mode: str):
         model = SAC(
             "MlpPolicy",
             env,
-            learning_rate=1e-4,  # Lower LR for stability
+            learning_rate=cfg['lr'],  # Lower LR for stability
             buffer_size=cfg["buffer"],
             batch_size=cfg["batch"],
             learning_starts=cfg["batch"] * 4,
@@ -174,7 +174,7 @@ def run(env_id: str, table_cfg: dict, extractor_mode: str):
         )
 
     # Train the agent
-    model.learn(total_timesteps=cfg["total_steps"], progress_bar=True)
+    model.learn(total_timesteps=cfg["total_steps"], progress_bar=True, callback=ClipGradCallback(max_norm=0.5))
 
     # Save VecNormalize stats after training
     env.save("vecnormalize.pkl")
