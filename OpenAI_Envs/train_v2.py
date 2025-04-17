@@ -142,7 +142,9 @@ def run(env_id: str, table_cfg: dict, extractor_mode: str):
             done = term or trunc
         rets.append(ep_ret)
     mean, std = float(np.mean(rets)), float(np.std(rets))
-    print(f"{env_id:<28} | {extractor_mode:<8} | {mean:8.2f} ± {std:6.2f}")
+    log_line = f"{env_id:<28} | {extractor_mode:<8} | {mean:8.2f} ± {std:6.2f}\n"
+    with open("results.log", "a") as f:
+        f.write(log_line)
 
 # -----------------------------------------------------------------------------
 # 4.  entry‑point
