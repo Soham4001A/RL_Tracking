@@ -133,6 +133,7 @@ def run(env_id: str, table_cfg: dict, extractor_mode: str):
             feat_cls, feat_kwargs = LMAFeaturesExtractor, dict(embed_dim=embed, num_heads_stacking=heads, target_l_new=obs_dim//2, d_new=d_new, num_heads_latent=num_heads_latent, ff_latent_hidden=embed*2, num_lma_layers=layers, dropout=0.05, bias=True, seq_len=obs_dim)
         elif extractor_mode == "MHA_Lite":
             # Special check for MHA Lite: ensure d_new is a multiple of num_heads_latent
+            d_new = embed // 2
             max_attempts = 10
             attempt = 0
             while d_new % heads != 0 and attempt < max_attempts:
