@@ -127,7 +127,7 @@ def make_norm_env(env_id, n_envs, clip_reward=1.0):
             env = TimeLimit(env, max_episode_steps=200)
             return env
         venv = make_vec_env(env_fn, n_envs, wrapper_class=TimeFeatureWrapper)
-        venv = VecNormalize(venv, norm_obs=True, norm_reward=False, clip_obs=10.0)
+        venv = VecNormalize(venv, norm_obs=True, norm_reward=True, clip_obs=10.0)
     else:
         venv = make_vec_env(env_id, n_envs=n_envs, wrapper_class=TimeFeatureWrapper)
         venv = VecNormalize(
@@ -180,7 +180,7 @@ def run(env_id: str, table_cfg: dict, extractor_mode: str):
     policy_kwargs = dict(net_arch=cfg["net_arch"])
     if extractor_mode == "Baseline":
         if env_id == "MountainCarContinuous-v0":
-            policy_kwargs.update(log_std_init=0.5)
+            policy_kwargs.update(log_std_init=-0.5)
         elif env_id == "Pendulum-v1":
             policy_kwargs.update(log_std_init=-0.5)
         elif env_id == "BipedalWalker-v3":
@@ -191,44 +191,44 @@ def run(env_id: str, table_cfg: dict, extractor_mode: str):
         elif env_id == "Pendulum-v1":
             policy_kwargs.update(log_std_init=-1.0)
         elif env_id == "BipedalWalker-v3":
-            policy_kwargs.update(log_std_init=-2.0)
+            policy_kwargs.update(log_std_init=-1.0)
     if feat_cls:
         policy_kwargs.update(features_extractor_class=SafeFeaturesExtractor, features_extractor_kwargs=dict(extractor_cls=feat_cls, **feat_kwargs))
 
     if extractor_mode == "MHA":
         if env_id == "MountainCarContinuous-v0":
-            lr = 3e-4
+            lr = 3e-5
         elif env_id == "Pendulum-v1":
             lr = 6e-4
         elif env_id == "BipedalWalker-v3":
-            lr = 6e-4
+            lr = 3e-5
         tau = 0.005
         scheduler_factory = lambda optimizer: LinearLR(optimizer, start_factor=1.0, end_factor=0.25, total_iters=cfg["total_steps"])
     elif extractor_mode == "LMA":
         if env_id == "MountainCarContinuous-v0":
-            lr = 3e-4
+            lr = 3e-5
         elif env_id == "Pendulum-v1":
             lr = 6e-4
         elif env_id == "BipedalWalker-v3":
-            lr = 6e-4
+            lr = 6e-5
         tau = 0.002
         scheduler_factory = lambda optimizer: LinearLR(optimizer, start_factor=1.0, end_factor=0.25, total_iters=cfg["total_steps"])
     elif extractor_mode == "MHA_Lite":
         if env_id == "MountainCarContinuous-v0":
-            lr = 3e-4
+            lr = 3e-5
         elif env_id == "Pendulum-v1":
             lr = 6e-4
         elif env_id == "BipedalWalker-v3":
-            lr = 6e-4
+            lr = 6e-5
         tau = 0.002
         scheduler_factory = lambda optimizer: LinearLR(optimizer, start_factor=1.0, end_factor=0.25, total_iters=cfg["total_steps"])
     else:  # Baseline
         if env_id == "MountainCarContinuous-v0":
-            lr = 3e-4
+            lr = 3e-5
         elif env_id == "Pendulum-v1":
             lr = 6e-4
         elif env_id == "BipedalWalker-v3":
-            lr = 6e-4
+            lr = 6e-5
         tau = 0.005
         scheduler_factory = lambda optimizer: LinearLR(optimizer, start_factor=1.0, end_factor=0.25, total_iters=cfg["total_steps"])
 
