@@ -121,8 +121,13 @@ class SafeFeaturesExtractor(BaseFeaturesExtractor):
 # -----------------------------------------------------------------------------
 def make_norm_env(env_id, n_envs, clip_reward=1.0):
     if env_id=="MountainCarContinuous-v0":
-        venv = make_vec_env(env_id, n_envs, wrapper_class=TimeFeatureWrapper)
-        venv = VecNormalize(venv, norm_obs=True, norm_reward=False, clip_obs=10.0) # I am not sure why this works but it does
+        from gym.wrappers import TimeLimit
+        def env_fn():
+            env = gym.make(env_id)
+            env = TimeLimit(env, max_episode_steps=200)
+            return env
+        venv = make_vec_env(env_fn, n_envs, wrapper_class=TimeFeatureWrapper)
+        venv = VecNormalize(venv, norm_obs=True, norm_reward=False, clip_obs=10.0)
     else:
         venv = make_vec_env(env_id, n_envs=n_envs, wrapper_class=TimeFeatureWrapper)
         venv = VecNormalize(
