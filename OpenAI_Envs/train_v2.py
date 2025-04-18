@@ -120,14 +120,18 @@ class SafeFeaturesExtractor(BaseFeaturesExtractor):
 #     Trains and evaluates an RL agent on a given environment and feature extractor.
 # -----------------------------------------------------------------------------
 def make_norm_env(env_id, n_envs, clip_reward=1.0):
-    venv = make_vec_env(env_id, n_envs=n_envs, wrapper_class=TimeFeatureWrapper)
-    venv = VecNormalize(
-        venv,
-        norm_obs=True,
-        norm_reward=True,
-        clip_obs=10.0,
-        clip_reward=clip_reward
-    )
+    if env_id=="MountainCarContinuous-v0":
+        venv = make_vec_env(env_id, n_envs, wrapper_class=TimeFeatureWrapper)
+        venv = VecNormalize(venv, norm_obs=True, norm_reward=False, clip_obs=10.0)
+    else:
+        venv = make_vec_env(env_id, n_envs=n_envs, wrapper_class=TimeFeatureWrapper)
+        venv = VecNormalize(
+            venv,
+            norm_obs=True,
+            norm_reward=True,
+            clip_obs=10.0,
+            clip_reward=clip_reward
+        )
     return venv
 
 def run(env_id: str, table_cfg: dict, extractor_mode: str):
@@ -188,7 +192,7 @@ def run(env_id: str, table_cfg: dict, extractor_mode: str):
 
     if extractor_mode == "MHA":
         if env_id == "MountainCarContinuous-v0":
-            lr = 6e-3
+            lr = 3e-4
         elif env_id == "Pendulum-v1":
             lr = 6e-4
         elif env_id == "BipedalWalker-v3":
@@ -197,7 +201,7 @@ def run(env_id: str, table_cfg: dict, extractor_mode: str):
         scheduler_factory = lambda optimizer: LinearLR(optimizer, start_factor=1.0, end_factor=0.25, total_iters=cfg["total_steps"])
     elif extractor_mode == "LMA":
         if env_id == "MountainCarContinuous-v0":
-            lr = 6e-3
+            lr = 3e-4
         elif env_id == "Pendulum-v1":
             lr = 6e-4
         elif env_id == "BipedalWalker-v3":
@@ -206,7 +210,7 @@ def run(env_id: str, table_cfg: dict, extractor_mode: str):
         scheduler_factory = lambda optimizer: LinearLR(optimizer, start_factor=1.0, end_factor=0.25, total_iters=cfg["total_steps"])
     elif extractor_mode == "MHA_Lite":
         if env_id == "MountainCarContinuous-v0":
-            lr = 6e-3
+            lr = 3e-4
         elif env_id == "Pendulum-v1":
             lr = 6e-4
         elif env_id == "BipedalWalker-v3":
@@ -215,7 +219,7 @@ def run(env_id: str, table_cfg: dict, extractor_mode: str):
         scheduler_factory = lambda optimizer: LinearLR(optimizer, start_factor=1.0, end_factor=0.25, total_iters=cfg["total_steps"])
     else:  # Baseline
         if env_id == "MountainCarContinuous-v0":
-            lr = 6e-3
+            lr = 3e-4
         elif env_id == "Pendulum-v1":
             lr = 6e-4
         elif env_id == "BipedalWalker-v3":
