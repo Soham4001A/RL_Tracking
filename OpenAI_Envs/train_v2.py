@@ -18,7 +18,7 @@ from torch.optim.lr_scheduler import LinearLR
 warnings.filterwarnings("ignore")
 
 class LRSchedulerCallback(BaseCallback):
-    def __init__(self, scheduler_factory, verbose=0):
+    def __init__(self, scheduler_factory, verbose=1):
         super().__init__(verbose)
         self.scheduler_factory = scheduler_factory
         self.schedulers = []
@@ -182,7 +182,7 @@ def run(env_id: str, table_cfg: dict, extractor_mode: str):
             policy_kwargs.update(log_std_init=-0.5)
     else:
         if env_id == "MountainCarContinuous-v0":
-            policy_kwargs.update(log_std_init=-1.0)
+            policy_kwargs.update(log_std_init=-0.5)
         elif env_id == "Pendulum-v1":
             policy_kwargs.update(log_std_init=-1.0)
         elif env_id == "BipedalWalker-v3":
@@ -192,7 +192,7 @@ def run(env_id: str, table_cfg: dict, extractor_mode: str):
 
     if extractor_mode == "MHA":
         if env_id == "MountainCarContinuous-v0":
-            lr = 3e-4
+            lr = 6e-4
         elif env_id == "Pendulum-v1":
             lr = 6e-4
         elif env_id == "BipedalWalker-v3":
@@ -201,7 +201,7 @@ def run(env_id: str, table_cfg: dict, extractor_mode: str):
         scheduler_factory = lambda optimizer: LinearLR(optimizer, start_factor=1.0, end_factor=0.25, total_iters=cfg["total_steps"])
     elif extractor_mode == "LMA":
         if env_id == "MountainCarContinuous-v0":
-            lr = 3e-4
+            lr = 6e-4
         elif env_id == "Pendulum-v1":
             lr = 6e-4
         elif env_id == "BipedalWalker-v3":
@@ -210,7 +210,7 @@ def run(env_id: str, table_cfg: dict, extractor_mode: str):
         scheduler_factory = lambda optimizer: LinearLR(optimizer, start_factor=1.0, end_factor=0.25, total_iters=cfg["total_steps"])
     elif extractor_mode == "MHA_Lite":
         if env_id == "MountainCarContinuous-v0":
-            lr = 3e-4
+            lr = 6e-4
         elif env_id == "Pendulum-v1":
             lr = 6e-4
         elif env_id == "BipedalWalker-v3":
@@ -219,7 +219,7 @@ def run(env_id: str, table_cfg: dict, extractor_mode: str):
         scheduler_factory = lambda optimizer: LinearLR(optimizer, start_factor=1.0, end_factor=0.25, total_iters=cfg["total_steps"])
     else:  # Baseline
         if env_id == "MountainCarContinuous-v0":
-            lr = 3e-4
+            lr = 6e-4
         elif env_id == "Pendulum-v1":
             lr = 6e-4
         elif env_id == "BipedalWalker-v3":
