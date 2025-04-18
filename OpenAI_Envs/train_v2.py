@@ -69,7 +69,7 @@ TABLE_A = {
     #     "buffer": 100_000,
     # },
     "MountainCarContinuous-v0": {
-        "total_steps": 300_000,
+        "total_steps": 500_000,
         "n_envs":128,
         "batch": 256,
         "grad_steps": 8,
