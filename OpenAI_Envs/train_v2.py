@@ -236,7 +236,7 @@ def run(env_id: str, table_cfg: dict, extractor_mode: str):
         learning_rate=lr,
         buffer_size=cfg["buffer"],
         batch_size=cfg["batch"],
-        learning_starts=cfg["batch"] * 4,
+        learning_starts=learning_starts,
         ent_coef="auto",
         tau=tau,
         train_freq=(64, "step"),
