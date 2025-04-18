@@ -18,7 +18,7 @@ from torch.optim.lr_scheduler import LinearLR
 warnings.filterwarnings("ignore")
 
 class LRSchedulerCallback(BaseCallback):
-    def __init__(self, scheduler_factory, verbose=1):
+    def __init__(self, scheduler_factory, verbose=0):
         super().__init__(verbose)
         self.scheduler_factory = scheduler_factory
         self.schedulers = []
@@ -175,14 +175,14 @@ def run(env_id: str, table_cfg: dict, extractor_mode: str):
     policy_kwargs = dict(net_arch=cfg["net_arch"])
     if extractor_mode == "Baseline":
         if env_id == "MountainCarContinuous-v0":
-            policy_kwargs.update(log_std_init=-0.5)
+            policy_kwargs.update(log_std_init=-0.2)
         elif env_id == "Pendulum-v1":
             policy_kwargs.update(log_std_init=-0.5)
         elif env_id == "BipedalWalker-v3":
             policy_kwargs.update(log_std_init=-0.5)
     else:
         if env_id == "MountainCarContinuous-v0":
-            policy_kwargs.update(log_std_init=-0.5)
+            policy_kwargs.update(log_std_init=-0.2)
         elif env_id == "Pendulum-v1":
             policy_kwargs.update(log_std_init=-1.0)
         elif env_id == "BipedalWalker-v3":
