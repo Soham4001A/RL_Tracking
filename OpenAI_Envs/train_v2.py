@@ -70,7 +70,7 @@ TABLE_A = {
     # },
     "MountainCarContinuous-v0": {
         "total_steps": 300_000,
-        "n_envs":128,
+        "n_envs":16,
         "batch": 256,
         "grad_steps": 8,
         "net_arch": dict(pi=[64, 64], qf=[64, 64]),
@@ -228,7 +228,8 @@ def run(env_id: str, table_cfg: dict, extractor_mode: str):
         scheduler_factory = lambda optimizer: LinearLR(optimizer, start_factor=1.0, end_factor=0.25, total_iters=cfg["total_steps"])
 
     lr_scheduler_callback = LRSchedulerCallback(scheduler_factory)
-
+    learning_starts = cfg["batch"] * 2 if env_id=="MountainCarContinuous-v0" else cfg["batch"]*4
+    
     model = SAC(
         "MlpPolicy",
         env,
@@ -238,7 +239,7 @@ def run(env_id: str, table_cfg: dict, extractor_mode: str):
         learning_starts=cfg["batch"] * 4,
         ent_coef="auto",
         tau=tau,
-        train_freq=(1, "step"),
+        train_freq=(64, "step"),
         gradient_steps=cfg["grad_steps"],
         policy_kwargs=policy_kwargs,
         device="cuda" if th.cuda.is_available() else "cpu",
