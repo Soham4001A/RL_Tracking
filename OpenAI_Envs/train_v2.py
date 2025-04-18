@@ -219,7 +219,7 @@ def run(env_id: str, table_cfg: dict, extractor_mode: str):
         scheduler_factory = lambda optimizer: LinearLR(optimizer, start_factor=1.0, end_factor=0.25, total_iters=cfg["total_steps"])
     else:  # Baseline
         if env_id == "MountainCarContinuous-v0":
-            lr = 3e-3
+            lr = 6e-4
         elif env_id == "Pendulum-v1":
             lr = 6e-4
         elif env_id == "BipedalWalker-v3":
@@ -272,17 +272,11 @@ def run(env_id: str, table_cfg: dict, extractor_mode: str):
     # Save VecNormalize stats after training
     env.save("vecnorm.pkl")
 
-    # Print summary statistics once at the end
-    print(f"Training complete for {env_id} | {extractor_mode}")
-    print(f"Final episode length mean: {env.get_attr('episode_lengths')[-1] if hasattr(env, 'get_attr') else 'N/A'}")
-    print(f"Final episode reward mean: {env.get_attr('episode_rewards')[-1] if hasattr(env, 'get_attr') else 'N/A'}")
-
     # ------------------- deterministic evaluation -------------------
     eval_env_raw = make_vec_env(env_id, n_envs=1, wrapper_class=TimeFeatureWrapper)
     eval_env     = VecNormalize.load("vecnorm.pkl", eval_env_raw)
     eval_env.training = False
     eval_env.norm_reward = False
-    eval_env.clip_reward = np.inf
     rets = []
     for _ in range(100):
         obs = eval_env.reset()
