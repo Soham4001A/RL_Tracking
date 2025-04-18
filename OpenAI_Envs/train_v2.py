@@ -72,17 +72,17 @@ TABLE_A = {
         "total_steps": 500_000,
         "n_envs":128,
         "batch": 256,
-        "grad_steps": 8,
-        "net_arch": dict(pi=[64, 64], qf=[64, 64]),
-        "buffer": 1_000_000,
+        "grad_steps": 16,
+        "net_arch": dict(pi=[32, 32], qf=[64, 64]),
+        "buffer": 100_000,
     },
     "BipedalWalker-v3": {
         "total_steps": 600_000,
         "n_envs": 128,
         "batch": 256,
-        "grad_steps": 8,
-        "net_arch": dict(pi=[64, 64], qf=[128, 128]),
-        "buffer": 1_000_000,
+        "grad_steps": 16,
+        "net_arch": dict(pi=[32, 32], qf=[64, 64]),
+        "buffer": 100_000,
     },
 }
 
@@ -124,7 +124,7 @@ def make_norm_env(env_id, n_envs, clip_reward=1.0):
         from gym.wrappers import TimeLimit
         def env_fn():
             env = gym.make(env_id)
-            env = TimeLimit(env, max_episode_steps=200)
+            env = TimeLimit(env, max_episode_steps=500)
             return env
         venv = make_vec_env(env_fn, n_envs, wrapper_class=TimeFeatureWrapper)
         venv = VecNormalize(venv, norm_obs=True, norm_reward=True, clip_obs=10.0)
