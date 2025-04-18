@@ -60,14 +60,14 @@ if not hasattr(np, "float_"):
 #     and full-scale runs (B). Each environment has its own config.
 # -----------------------------------------------------------------------------
 TABLE_A = {
-    # "Pendulum-v1": {
-    #     "total_steps": 300_000,
-    #     "n_envs": 128,
-    #     "batch": 256,  # Increased batch size for stability
-    #     "grad_steps": 8,
-    #     "net_arch": dict(pi=[32, 32], qf=[32, 32]),
-    #     "buffer": 100_000,
-    # },
+    "Pendulum-v1": {
+        "total_steps": 300_000,
+        "n_envs": 128,
+        "batch": 256,  # Increased batch size for stability
+        "grad_steps": 8,
+        "net_arch": dict(pi=[32, 32], qf=[32, 32]),
+        "buffer": 100_000,
+    },
     "MountainCarContinuous-v0": {
         "total_steps": 500_000,
         "n_envs":128,
