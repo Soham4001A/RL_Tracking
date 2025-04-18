@@ -122,7 +122,7 @@ class SafeFeaturesExtractor(BaseFeaturesExtractor):
 def make_norm_env(env_id, n_envs, clip_reward=1.0):
     if env_id=="MountainCarContinuous-v0":
         venv = make_vec_env(env_id, n_envs, wrapper_class=TimeFeatureWrapper)
-        venv = VecNormalize(venv, norm_obs=True, norm_reward=False, clip_obs=10.0)
+        venv = VecNormalize(venv, norm_obs=True, norm_reward=True, clip_obs=10.0, clip_reward=10.0)
     else:
         venv = make_vec_env(env_id, n_envs=n_envs, wrapper_class=TimeFeatureWrapper)
         venv = VecNormalize(
@@ -175,14 +175,14 @@ def run(env_id: str, table_cfg: dict, extractor_mode: str):
     policy_kwargs = dict(net_arch=cfg["net_arch"])
     if extractor_mode == "Baseline":
         if env_id == "MountainCarContinuous-v0":
-            policy_kwargs.update(log_std_init=-0.5)
+            policy_kwargs.update(log_std_init=0.5)
         elif env_id == "Pendulum-v1":
             policy_kwargs.update(log_std_init=-0.5)
         elif env_id == "BipedalWalker-v3":
             policy_kwargs.update(log_std_init=-0.5)
     else:
         if env_id == "MountainCarContinuous-v0":
-            policy_kwargs.update(log_std_init=-1.0)
+            policy_kwargs.update(log_std_init=0.5)
         elif env_id == "Pendulum-v1":
             policy_kwargs.update(log_std_init=-1.0)
         elif env_id == "BipedalWalker-v3":
