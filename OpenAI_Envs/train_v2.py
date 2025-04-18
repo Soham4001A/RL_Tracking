@@ -8,7 +8,7 @@ from stable_baselines3 import SAC
 from stable_baselines3.common.env_util import make_vec_env
 import torch as th
 import warnings
-from classes import *  # Import custom feature extractors and utilities
+from classes import *  # Import custom extractors, callbacks (includes NaNGuard)
 from tqdm_utils import suppress_tqdm_cleanup
 from sb3_contrib.common.wrappers import TimeFeatureWrapper
 from stable_baselines3.common.vec_env import VecNormalize
@@ -246,8 +246,12 @@ def run(env_id: str, table_cfg: dict, extractor_mode: str):
     )
 
     # Train the agent
-    callbacks = [ClipGradCallback(max_norm=0.5), lr_scheduler_callback]
-    model.learn(total_timesteps=cfg["total_steps"], progress_bar=True, callback=callbacks)
+    callbacks = [
+        ClipGradCallback(max_norm=0.5),
+        lr_scheduler_callback,
+        NaNGuardCallback(action="warn")  # new: make NaNs visible
+    ]
+    model.learn(total_timesteps=cfg["total_steps"], progress_bar=True, log_interval=1, callback=callbacks)
 
     # Save VecNormalize stats after training
     env.save("vecnorm.pkl")

@@ -499,6 +499,36 @@ class GradientMonitorCallback(BaseCallback):
                 if grad_norm > 10:  # Threshold for exploding gradients
                     print(f"Warning: High gradient norm ({grad_norm:.2f}) in {name}")
         return True
+
+class NaNGuardCallback(BaseCallback):
+    """
+    Abort or warn when NaNs appear before/after the optimiser step.
+    SB3 silently skips updates that contain NaNs, which can leave the
+    learner stuck in “rollout‐only” mode.  This callback makes the
+    event visible.
+    """
+    def __init__(self, action: str = "warn", verbose: int = 0):
+        """
+        :param action: "warn" = just print a warning and continue,
+                       "stop" = return False to interrupt `learn()`.
+        """
+        super().__init__(verbose)
+        assert action in ("warn", "stop")
+        self.action = action
+
+    def _on_step(self) -> bool:
+        nan_found = False
+        for name, param in self.model.policy.named_parameters():
+            if param.grad is not None and torch.isnan(param.grad).any():
+                print(f"[NaNGuard] NaN detected in gradient of {name}")
+                nan_found = True
+            if torch.isnan(param.data).any():
+                print(f"[NaNGuard] NaN detected in parameter {name}")
+                nan_found = True
+        if nan_found and self.action == "stop":
+            print("[NaNGuard] Stopping training because of NaNs.")
+            return False  # interrupts learn()
+        return True
     
 class ClipGradCallback(BaseCallback):
     def __init__(self, max_norm=0.5, verbose=0):
