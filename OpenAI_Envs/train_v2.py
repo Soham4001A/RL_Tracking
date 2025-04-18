@@ -70,9 +70,9 @@ TABLE_A = {
     # },
     "MountainCarContinuous-v0": {
         "total_steps": 300_000,
-        "n_envs":16,
+        "n_envs":128,
         "batch": 256,
-        "grad_steps": 64,
+        "grad_steps": 8,
         "net_arch": dict(pi=[64, 64], qf=[64, 64]),
         "buffer": 1_000_000,
     },
