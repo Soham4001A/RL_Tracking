@@ -122,7 +122,7 @@ class SafeFeaturesExtractor(BaseFeaturesExtractor):
 def make_norm_env(env_id, n_envs, clip_reward=1.0):
     if env_id=="MountainCarContinuous-v0":
         venv = make_vec_env(env_id, n_envs, wrapper_class=TimeFeatureWrapper)
-        venv = VecNormalize(venv, norm_obs=True, norm_reward=False, clip_obs=10.0)
+        venv = VecNormalize(venv, norm_obs=True, norm_reward=False, clip_obs=10.0) # I am not sure why this works but it does
     else:
         venv = make_vec_env(env_id, n_envs=n_envs, wrapper_class=TimeFeatureWrapper)
         venv = VecNormalize(
