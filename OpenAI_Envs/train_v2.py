@@ -277,6 +277,7 @@ def run(env_id: str, table_cfg: dict, extractor_mode: str):
     eval_env     = VecNormalize.load("vecnorm.pkl", eval_env_raw)
     eval_env.training = False
     eval_env.norm_reward = False
+    eval_env.clip_reward = np.inf
     rets = []
     for _ in range(100):
         obs = eval_env.reset()
