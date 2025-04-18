@@ -568,3 +568,37 @@ class LossGuardCallback(BaseCallback):
             print("[LossGuard] Stopping because of NaN/Inf loss")
             return False
         return True
+
+class StickyTrainStatsCallback(BaseCallback):
+    """
+    Remember the last train/ scalars (actor_loss, critic_loss, ent_coef, …)
+    and re‑emit them on every call so SB3’s printer always has something
+    to show.
+    """
+    def __init__(self, verbose: int = 0):
+        super().__init__(verbose)
+        self.cache: dict[str, float] = {}
+
+    def _on_step(self) -> bool:
+        # grab new values, if any
+        for k, v in self.logger.name_to_value.items():
+            if k.startswith("train/"):
+                self.cache[k] = v
+        # push cached values back so they exist every tick
+        for k, v in self.cache.items():
+            self.logger.record(k, v, exclude=("tensorboard",))
+        return True
+
+class UpdateMonitor(BaseCallback):
+    def _on_step(self) -> bool:
+        # Number of gradient updates so far
+        n_upd = getattr(self.model, "_n_updates", 0)
+        # Size of replay buffer
+        buf_len = len(self.model.replay_buffer)
+        # How many gradient steps will be executed at rollout‑end
+        grad_steps = self.model.gradient_steps
+        if self.n_calls % 1000 == 0:          # every 1 k env steps
+            print(f"[UpdMon] step {self.num_timesteps}  "
+                  f"updates={n_upd}  buffer={buf_len}  "
+                  f"grad_steps={grad_steps}")
+        return True

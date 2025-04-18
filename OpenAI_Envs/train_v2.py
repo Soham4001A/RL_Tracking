@@ -74,7 +74,7 @@ TABLE_A = {
         "batch": 256,
         "grad_steps": 8,
         "net_arch": dict(pi=[64, 64], qf=[64, 64]),
-        "buffer": 100_000,
+        "buffer": 1_000_000,
     },
     "BipedalWalker-v3": {
         "total_steps": 600_000,
@@ -250,7 +250,9 @@ def run(env_id: str, table_cfg: dict, extractor_mode: str):
         ClipGradCallback(max_norm=0.5),
         lr_scheduler_callback,
         NaNGuardCallback(action="warn"),
-        LossGuardCallback(action="warn")   # <‑‑ new
+        LossGuardCallback(action="warn"),
+        StickyTrainStatsCallback(),
+        UpdateMonitor(), 
     ]
     model.learn(total_timesteps=cfg["total_steps"], progress_bar=True, log_interval=1, callback=callbacks)
 
