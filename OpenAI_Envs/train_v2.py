@@ -18,7 +18,7 @@ from torch.optim.lr_scheduler import LinearLR
 warnings.filterwarnings("ignore")
 
 class LRSchedulerCallback(BaseCallback):
-    def __init__(self, scheduler_factory, verbose=0):
+    def __init__(self, scheduler_factory, verbose=1):
         super().__init__(verbose)
         self.scheduler_factory = scheduler_factory
         self.schedulers = []
@@ -229,41 +229,21 @@ def run(env_id: str, table_cfg: dict, extractor_mode: str):
 
     lr_scheduler_callback = LRSchedulerCallback(scheduler_factory)
 
-    if extractor_mode == "Baseline":
-        model = SAC(
-            "MlpPolicy",
-            env,
-            learning_rate=lr,
-            buffer_size=cfg['buffer'],
-            batch_size=cfg["batch"],
-            learning_starts=cfg["batch"] * 4,
-            ent_coef="auto",
-            tau=tau,
-            train_freq=(1, "step"),
-            gradient_steps=cfg["grad_steps"],
-            policy_kwargs=policy_kwargs,
-            device="cuda" if th.cuda.is_available() else "cpu",
-            verbose=1,
-        )
-    else:
-        batch_size = 256 if table_cfg is TABLE_A else 1024
-        if "max_grad_norm" in policy_kwargs:
-            del policy_kwargs["max_grad_norm"]
-        model = SAC(
-            "MlpPolicy",
-            env,
-            learning_rate=lr,
-            buffer_size=cfg["buffer"],
-            batch_size=batch_size,
-            learning_starts=batch_size * 4,
-            ent_coef="auto",
-            tau=tau,
-            train_freq=(1, "step"),
-            gradient_steps=cfg["grad_steps"],
-            policy_kwargs=policy_kwargs,
-            device="cuda" if th.cuda.is_available() else "cpu",
-            verbose=1,
-        )
+    model = SAC(
+        "MlpPolicy",
+        env,
+        learning_rate=lr,
+        buffer_size=cfg["buffer"],
+        batch_size=cfg["batch"],
+        learning_starts=cfg["batch"] * 4,
+        ent_coef="auto",
+        tau=tau,
+        train_freq=(1, "step"),
+        gradient_steps=cfg["grad_steps"],
+        policy_kwargs=policy_kwargs,
+        device="cuda" if th.cuda.is_available() else "cpu",
+        verbose=1,
+    )
 
     # Train the agent
     callbacks = [ClipGradCallback(max_norm=0.5), lr_scheduler_callback]
