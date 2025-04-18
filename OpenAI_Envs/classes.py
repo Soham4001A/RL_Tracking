@@ -541,3 +541,30 @@ class ClipGradCallback(BaseCallback):
                       if p.requires_grad and p.grad is not None]
         clip_grad_norm_(parameters, self.max_norm)
         return True           # keep training
+
+class LossGuardCallback(BaseCallback):
+    """
+    Detect NaN/Inf in the scalar losses that SAC reports
+    (actor, critic, entropy‑coef).  If a bad value appears,
+    print a warning and optionally stop training.
+    """
+    def __init__(self, action: str = "warn", verbose: int = 0):
+        super().__init__(verbose)
+        assert action in ("warn", "stop")
+        self.action = action
+
+    def _on_step(self) -> bool:
+        logger_dict = self.logger.name_to_value      # SB3 stores the latest scalars here
+        bad = False
+        for key in ("train/actor_loss",
+                    "train/critic_loss",
+                    "train/ent_coef_loss"):
+            if key in logger_dict:
+                val = logger_dict[key]
+                if not np.isfinite(val):
+                    print(f"[LossGuard] {key} became {val}")
+                    bad = True
+        if bad and self.action == "stop":
+            print("[LossGuard] Stopping because of NaN/Inf loss")
+            return False
+        return True

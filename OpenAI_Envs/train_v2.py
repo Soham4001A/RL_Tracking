@@ -249,7 +249,8 @@ def run(env_id: str, table_cfg: dict, extractor_mode: str):
     callbacks = [
         ClipGradCallback(max_norm=0.5),
         lr_scheduler_callback,
-        NaNGuardCallback(action="warn")  # new: make NaNs visible
+        NaNGuardCallback(action="warn"),
+        LossGuardCallback(action="warn")   # <‑‑ new
     ]
     model.learn(total_timesteps=cfg["total_steps"], progress_bar=True, log_interval=1, callback=callbacks)
 
