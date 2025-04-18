@@ -594,7 +594,7 @@ class UpdateMonitor(BaseCallback):
         # Number of gradient updates so far
         n_upd = getattr(self.model, "_n_updates", 0)
         # Size of replay buffer
-        buf_len = len(self.model.replay_buffer)
+        buf_len = self.model.buffer_size
         # How many gradient steps will be executed at rollout‑end
         grad_steps = self.model.gradient_steps
         if self.n_calls % 1000 == 0:          # every 1 k env steps
