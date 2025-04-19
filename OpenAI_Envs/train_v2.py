@@ -73,7 +73,7 @@ TABLE_A = {
         "n_envs":128,
         "batch": 256,
         "grad_steps": 8,
-        "net_arch": dict(pi=[32, 32], qf=[32, 32]),
+        "net_arch": dict(pi=[128, 128, 64], qf=[128, 128, 64]),
         "buffer": 100_000,
     },
     "BipedalWalker-v3": {
@@ -81,7 +81,7 @@ TABLE_A = {
         "n_envs": 128,
         "batch": 256,
         "grad_steps": 8,
-        "net_arch": dict(pi=[32, 32], qf=[32, 32]),
+        "net_arch": dict(pi=[128, 128, 64], qf=[128, 128, 64]),
         "buffer": 100_000,
     },
 }
