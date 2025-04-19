@@ -60,28 +60,28 @@ if not hasattr(np, "float_"):
 #     and full-scale runs (B). Each environment has its own config.
 # -----------------------------------------------------------------------------
 TABLE_A = {
-    "Pendulum-v1": {
-        "total_steps": 300_000,
-        "n_envs": 128,
-        "batch": 256,  # Increased batch size for stability
-        "grad_steps": 8,
-        "net_arch": dict(pi=[32, 32], qf=[32, 32]),
-        "buffer": 100_000,
-    },
+    # "Pendulum-v1": {
+    #     "total_steps": 300_000,
+    #     "n_envs": 128,
+    #     "batch": 256,  # Increased batch size for stability
+    #     "grad_steps": 8,
+    #     "net_arch": dict(pi=[32, 32], qf=[32, 32]),
+    #     "buffer": 100_000,
+    # },
     "MountainCarContinuous-v0": {
         "total_steps": 500_000,
         "n_envs":128,
         "batch": 256,
-        "grad_steps": 16,
-        "net_arch": dict(pi=[32, 32], qf=[64, 64]),
+        "grad_steps": 8,
+        "net_arch": dict(pi=[32, 32], qf=[32, 32]),
         "buffer": 100_000,
     },
     "BipedalWalker-v3": {
         "total_steps": 600_000,
         "n_envs": 128,
         "batch": 256,
-        "grad_steps": 16,
-        "net_arch": dict(pi=[32, 32], qf=[64, 64]),
+        "grad_steps": 8,
+        "net_arch": dict(pi=[32, 32], qf=[32, 32]),
         "buffer": 100_000,
     },
 }
@@ -121,13 +121,8 @@ class SafeFeaturesExtractor(BaseFeaturesExtractor):
 # -----------------------------------------------------------------------------
 def make_norm_env(env_id, n_envs, clip_reward=1.0):
     if env_id=="MountainCarContinuous-v0":
-        from gym.wrappers import TimeLimit
-        def env_fn():
-            env = gym.make(env_id)
-            env = TimeLimit(env, max_episode_steps=500)
-            return env
-        venv = make_vec_env(env_fn, n_envs, wrapper_class=TimeFeatureWrapper)
-        venv = VecNormalize(venv, norm_obs=True, norm_reward=True, clip_obs=10.0)
+        venv = make_vec_env(env_id, n_envs=n_envs, wrapper_class=TimeFeatureWrapper)
+        venv = VecNormalize(venv, norm_obs=False, norm_reward=False, clip_obs=10.0)
     else:
         venv = make_vec_env(env_id, n_envs=n_envs, wrapper_class=TimeFeatureWrapper)
         venv = VecNormalize(
@@ -197,38 +192,38 @@ def run(env_id: str, table_cfg: dict, extractor_mode: str):
 
     if extractor_mode == "MHA":
         if env_id == "MountainCarContinuous-v0":
-            lr = 3e-5
+            lr = 3e-4
         elif env_id == "Pendulum-v1":
             lr = 6e-4
         elif env_id == "BipedalWalker-v3":
-            lr = 3e-5
+            lr = 3e-4
         tau = 0.005
         scheduler_factory = lambda optimizer: LinearLR(optimizer, start_factor=1.0, end_factor=0.25, total_iters=cfg["total_steps"])
     elif extractor_mode == "LMA":
         if env_id == "MountainCarContinuous-v0":
-            lr = 3e-5
+            lr = 3e-4
         elif env_id == "Pendulum-v1":
             lr = 6e-4
         elif env_id == "BipedalWalker-v3":
-            lr = 6e-5
+            lr = 6e-4
         tau = 0.002
         scheduler_factory = lambda optimizer: LinearLR(optimizer, start_factor=1.0, end_factor=0.25, total_iters=cfg["total_steps"])
     elif extractor_mode == "MHA_Lite":
         if env_id == "MountainCarContinuous-v0":
-            lr = 3e-5
+            lr = 3e-4
         elif env_id == "Pendulum-v1":
             lr = 6e-4
         elif env_id == "BipedalWalker-v3":
-            lr = 6e-5
+            lr = 6e-4
         tau = 0.002
         scheduler_factory = lambda optimizer: LinearLR(optimizer, start_factor=1.0, end_factor=0.25, total_iters=cfg["total_steps"])
     else:  # Baseline
         if env_id == "MountainCarContinuous-v0":
-            lr = 3e-5
+            lr = 3e-4
         elif env_id == "Pendulum-v1":
             lr = 6e-4
         elif env_id == "BipedalWalker-v3":
-            lr = 6e-5
+            lr = 6e-4
         tau = 0.005
         scheduler_factory = lambda optimizer: LinearLR(optimizer, start_factor=1.0, end_factor=0.25, total_iters=cfg["total_steps"])
 

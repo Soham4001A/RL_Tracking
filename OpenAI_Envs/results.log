@@ -1,6 +1,6 @@
 Final-
 
-Pendulum-v1                  | Baseline |  -140.25 ±  73.57
-Pendulum-v1                  | MHA      |  -160.54 ±  94.60
-Pendulum-v1                  | LMA      |  -142.01 ±  91.19
-
+Pendulum-v1                  | Baseline |  -152.21 ± 100.34
+Pendulum-v1                  | MHA      |  -199.44 ±  80.73
+Pendulum-v1                  | LMA      |  -163.99 ±  87.18
+Pendulum-v1                  | MHA_Lite |  -177.01 ±  99.03
