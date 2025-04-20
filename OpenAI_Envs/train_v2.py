@@ -1,3 +1,7 @@
+# README: This script trains RL agents using the Stable Baselines3 library with custom feature extractors.
+# NOTE: Currently, only the Pendulum-v1 environment is supported -> MountainCarContinuous-v0 and BipedalWalker-v3 are commented out due to issues with hyperparameters and neither models nor extractors are trained.
+# -----------------------------------------------------------------------------
+
 import os
 # Disable rich progress bars for TQDM to keep output clean
 os.environ["TQDM_DISABLE_RICH"] = "1"
@@ -60,30 +64,30 @@ if not hasattr(np, "float_"):
 #     and full-scale runs (B). Each environment has its own config.
 # -----------------------------------------------------------------------------
 TABLE_A = {
-    # "Pendulum-v1": {
-    #     "total_steps": 300_000,
-    #     "n_envs": 128,
-    #     "batch": 256,  # Increased batch size for stability
-    #     "grad_steps": 8,
-    #     "net_arch": dict(pi=[32, 32], qf=[32, 32]),
-    #     "buffer": 100_000,
-    # },
-    "MountainCarContinuous-v0": {
-        "total_steps": 300_000,
-        "n_envs":128,
-        "batch": 256,
-        "grad_steps": 16,
-        "net_arch": dict(pi=[128, 128, 64], qf=[128, 128, 64]),
-        "buffer": 100_000,
-    },
-    "BipedalWalker-v3": {
+    "Pendulum-v1": {
         "total_steps": 300_000,
         "n_envs": 128,
-        "batch": 256,
-        "grad_steps": 16,
-        "net_arch": dict(pi=[128, 128, 64], qf=[128, 128, 64]),
+        "batch": 256,  # Increased batch size for stability
+        "grad_steps": 8,
+        "net_arch": dict(pi=[32, 32], qf=[32, 32]),
         "buffer": 100_000,
     },
+    # "MountainCarContinuous-v0": {
+    #     "total_steps": 300_000,
+    #     "n_envs":128,
+    #     "batch": 256,
+    #     "grad_steps": 16,
+    #     "net_arch": dict(pi=[128, 128, 64], qf=[128, 128, 64]),
+    #     "buffer": 100_000,
+    # },
+    # "BipedalWalker-v3": {
+    #     "total_steps": 300_000,
+    #     "n_envs": 128,
+    #     "batch": 256,
+    #     "grad_steps": 16,
+    #     "net_arch": dict(pi=[128, 128, 64], qf=[128, 128, 64]),
+    #     "buffer": 100_000,
+    # },
 }
 
 TABLE_B = {

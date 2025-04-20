@@ -3,4 +3,12 @@ Final-
 Pendulum-v1                  | Baseline |  -152.21 ± 100.34
 Pendulum-v1                  | MHA      |  -199.44 ±  80.73
 Pendulum-v1                  | LMA      |  -163.99 ±  87.18
-Pendulum-v1                  | MHA_Lite |  -177.01 ±  99.03
+Pendulum-v1                  | MHA_Lite |  -177.01 ±  99.0
+
+
+MountainCarContinuous-v0     | Baseline |    -0.00 ±   0.00
+MountainCarContinuous-v0     | MHA      |    -0.00 ±   0.00
+MountainCarContinuous-v0     | LMA      |    -0.00 ±   0.00
+MountainCarContinuous-v0     | MHA_Lite |    -0.00 ±   0.00
+
+BipedalWalker-v3             | Baseline |   -77.12 ±  31.86
